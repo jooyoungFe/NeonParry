@@ -20,7 +20,8 @@ function createConfig({ env = process.env, root = DEFAULT_ROOT, port = 8080, sta
   if (!Number.isInteger(port) || port < 1 || port > 65535) throw Error('Invalid server port.');
   root = path.resolve(root);
   const publicUrl = `https://${name}-${port}.${domain}`;
-  const origins = ['https://jooyoungfe.github.io', publicUrl];
+  // Codespaces forwards same-origin HTTPS requests with a loopback Origin.
+  const origins = ['https://jooyoungfe.github.io', publicUrl, `https://localhost:${port}`];
   const source = ['scripts/serve.cjs', 'scripts/dev_duel.cjs', 'backend/server.cjs', 'backend/rooms.cjs', 'backend/matchmaking.cjs', 'frontend/index.html']
     .map(filename => fs.readFileSync(path.join(root, filename)));
   const fingerprint = hash(Buffer.concat([Buffer.from(JSON.stringify({ root, port, origins })), ...source]));

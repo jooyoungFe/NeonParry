@@ -11,7 +11,7 @@ GitHub Codespaces 하나에서 게임 화면과 온라인 듀얼 API를 함께 �
 
 이 주소는 HTTPS 게임 화면과 듀얼 API를 함께 제공합니다. 연결 설정을 입력할 필요 없이 같은 주소에서 방을 만들고 참가할 수 있습니다. 포트 공개 설정은 자동으로 바꾸지 않습니다. 공개하면 주소를 아는 사람은 로그인 없이 게임과 API에 접근할 수 있습니다.
 
-서버 내부는 `0.0.0.0:8080` HTTP이며, 외부 HTTPS는 GitHub 포트 포워딩이 제공합니다. CORS는 현재 Codespace의 정확한 HTTPS 출처와 `https://jooyoungfe.github.io`, 로컬 테스트 주소만 허용합니다. 다른 출처를 전체 허용하지 않습니다.
+서버 내부는 `0.0.0.0:8080` HTTP이며, 외부 HTTPS는 GitHub 포트 포워딩이 제공합니다. CORS는 현재 Codespace의 정확한 HTTPS 출처와 `https://jooyoungfe.github.io`, 로컬 테스트 주소만 허용합니다. GitHub 프록시가 같은 출처 요청을 전달할 때 사용하는 `https://localhost:8080`도 이 서버에서만 허용합니다. 다른 출처를 전체 허용하지 않습니다.
 
 ## 재시작과 확인
 

@@ -31,7 +31,7 @@ test('Codespaces starts once, accepts its exact origins, and reuses the verified
   assert.equal(first.pid, second.pid);
   assert.deepEqual([first.reused, second.reused].sort(), [false, true]);
   const base = 'http://127.0.0.1:' + port;
-  for (const origin of ['https://jooyoungfe.github.io', first.publicUrl, 'http://localhost:' + port, base]) {
+  for (const origin of ['https://jooyoungfe.github.io', first.publicUrl, 'https://localhost:' + port, 'http://localhost:' + port, base]) {
     const response = await fetch(base + '/api/v1/rooms', {
       method: 'POST', headers: { Origin: origin, 'Content-Type': 'application/json' }, body: JSON.stringify({ name: 'Codespaces' })
     });
@@ -39,7 +39,7 @@ test('Codespaces starts once, accepts its exact origins, and reuses the verified
     assert.equal(response.headers.get('access-control-allow-origin'), origin);
     assert.ok((await response.json()).playerToken);
   }
-  for (const origin of ['https://attacker.example', first.publicUrl + '.evil.example', 'https://jooyoungfe.github.io.evil.example']) {
+  for (const origin of ['https://attacker.example', first.publicUrl + '.evil.example', 'https://jooyoungfe.github.io.evil.example', 'https://localhost:' + (port === 65535 ? port - 1 : port + 1), 'https://localhost.evil.example:' + port]) {
     assert.equal((await fetch(base + '/health', { headers: { Origin: origin } })).status, 403, origin);
   }
   const config = await fetch(base + '/config.js');
@@ -80,7 +80,7 @@ test('a stale state file cannot authorize reuse of an unrelated server', async t
 test('the forwarding domain is validated and environment overrides cannot widen CORS', () => {
   const config = createConfig({ env: { ...env, GITHUB_CODESPACES_PORT_FORWARDING_DOMAIN: 'preview.app.github.dev', ALLOWED_ORIGINS: '*' } });
   assert.equal(config.publicUrl, 'https://test-neon-parry-8080.preview.app.github.dev');
-  assert.equal(config.env.ALLOWED_ORIGINS, 'https://jooyoungfe.github.io,https://test-neon-parry-8080.preview.app.github.dev');
+  assert.equal(config.env.ALLOWED_ORIGINS, 'https://jooyoungfe.github.io,https://test-neon-parry-8080.preview.app.github.dev,https://localhost:8080');
   assert.throws(() => createConfig({ env: { ...env, GITHUB_CODESPACES_PORT_FORWARDING_DOMAIN: 'app.github.dev/path' } }), /Invalid Codespaces/);
   assert.throws(() => createConfig({ env: { ...env, CODESPACE_NAME: '' } }), /inside a GitHub Codespace/);
 });
