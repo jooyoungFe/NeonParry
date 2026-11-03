@@ -1,11 +1,8 @@
 {
   "name": "Neon Parry server",
-  "image": "mcr.microsoft.com/devcontainers/universal:2",
-  "features": {
-    "ghcr.io/devcontainers/features/node:1": {
-      "version": "22"
-    }
-  },
+  "image": "mcr.microsoft.com/devcontainers/javascript-node:5-22-bookworm",
+  "containerUser": "node",
+  "remoteUser": "node",
   "forwardPorts": [8080],
   "portsAttributes": {
     "8080": {
