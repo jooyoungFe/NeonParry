@@ -2,7 +2,7 @@
 const http=require('node:http');
 const{RoomStore,ApiError}=require('./rooms.cjs');
 const{MatchmakingStore}=require('./matchmaking.cjs');
-const DEFAULT_ORIGINS=['http://localhost:8000','http://127.0.0.1:8000','https://qqock2e.github.io'];
+const DEFAULT_ORIGINS=['http://localhost:8000','http://127.0.0.1:8000','https://qqock2e.github.io','https://jooyoungFe.github.io'];
 function parseOrigins(text){
   const values=text===undefined?DEFAULT_ORIGINS:text.split(',').map(s=>s.trim()).filter(Boolean);
   for(const origin of values){let url;try{url=new URL(origin);}catch{throw Error('Invalid ALLOWED_ORIGINS origin.');}if(!['http:','https:'].includes(url.protocol)||url.origin!==origin)throw Error('ALLOWED_ORIGINS must contain exact HTTP(S) origins without paths.');}
