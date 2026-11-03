@@ -57,9 +57,9 @@ docker run --rm -p 8080:8080 \
 
 GitHub Pages는 HTML·CSS·JS 화면 파일만 제공하고 Node 대전 서버를 실행하지 않습니다. 기존 Pages 주소를 계속 쓰려면 위 서버를 따로 실행한 뒤 다음 두 가지를 연결합니다.
 
-- 대전 서버 `ALLOWED_ORIGINS`: `https://jooyoungFe.github.io`를 포함합니다. 통합 서버 페이지도 사용하려면 두 origin을 쉼표로 나열합니다.
+- 대전 서버 `ALLOWED_ORIGINS`: `https://jooyoungfe.github.io`를 포함합니다. 통합 서버 페이지도 사용하려면 두 origin을 쉼표로 나열합니다.
 - GitHub 저장소 **Settings → Secrets and variables → Actions → Variables**의 `NEON_API_BASE_URL`: 실제 HTTPS 대전 서버 주소를 넣고 Pages 워크플로를 다시 실행합니다.
 
-예: `ALLOWED_ORIGINS=https://neon-parry.example.com,https://jooyoungFe.github.io`. `/NeonParry/` 같은 경로는 origin에 넣지 않습니다. 한 서버에서 화면까지 제공하는 방식을 쓰면 Pages와 이 추가 설정은 필요 없습니다.
+예: `ALLOWED_ORIGINS=https://neon-parry.example.com,https://jooyoungfe.github.io`. `/NeonParry/` 같은 경로는 origin에 넣지 않습니다. 한 서버에서 화면까지 제공하는 방식을 쓰면 Pages와 이 추가 설정은 필요 없습니다.
 
 API만 별도로 실행하는 기존 명령은 `npm run start:backend`입니다. 공개 설정에는 비밀번호나 참가 토큰을 넣지 않습니다.
