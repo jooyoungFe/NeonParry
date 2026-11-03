@@ -4,7 +4,7 @@
 
 기존 캐릭터·바이러스·전투 화면·패링 효과를 그대로 사용하는 1:1 듀얼입니다. 기존 쉬움 난이도의 이동 속도와 패링 판정으로 공격과 수비를 주고받습니다. CPU 연습, 친구 초대방, 같은 서버의 다른 플레이어와 랜덤 매칭을 지원합니다. **제한시간 없이 취약률 100%에 도달하면 패배**합니다. 기존 싱글플레이와 로컬 기록도 유지합니다.
 
-[듀얼 규칙·조작](docs/DUEL.md) · [서버 실행 안내](docs/SERVER.md) · [GitHub에서 서버 실행](docs/CODESPACES.md) · [구조·배포](docs/ARCHITECTURE.md) · [API 계약](docs/ONLINE_API.md)
+[듀얼 규칙·조작](docs/DUEL.md) · [서버 실행 안내](docs/SERVER.md) · [Render 배포](docs/RENDER.md) · [Codespaces 실행](docs/CODESPACES.md) · [구조·배포](docs/ARCHITECTURE.md) · [API 계약](docs/ONLINE_API.md)
 
 ## 바로 실행
 
@@ -38,6 +38,8 @@ ALLOWED_ORIGINS=https://game.example.com npm run start:server
 **GitHub에서 실행하려면 Codespaces를 사용합니다.** 저장소의 Code → Codespaces에서 환경을 만들면 게임과 듀얼 서버가 자동으로 시작됩니다. Ports에서 8080을 Public으로 바꾸면 다른 사람도 접속할 수 있습니다. 개발용 환경이므로 유휴 시 자동으로 중지되며, 계속 켜 두는 호스팅은 아닙니다. [실행·공개·무료 한도 안내](docs/CODESPACES.md)를 확인하세요.
 
 **GitHub Pages는 화면 파일만 배포합니다.** Pages를 계속 쓰려면 별도 대전 서버를 운영하고 `NEON_API_BASE_URL`에 HTTPS 서버 주소를 설정해야 합니다. 위 통합 서버를 사용하면 게임도 같은 주소에 있으므로 Pages 없이 실행할 수 있습니다.
+
+Render 배포는 저장소의 `render.yaml`을 사용합니다. 무료 Web Service 하나에 게임과 듀얼 API를 함께 올립니다. [Render 배포 안내](docs/RENDER.md)에 연결 순서를 정리했습니다.
 
 ## 구조
 

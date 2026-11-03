@@ -28,6 +28,13 @@ function frontendFiles(directory = frontend, prefix = '') {
 
 function createGameServer({ port = 8000, ...backendOptions } = {}) {
   const origins = parseOrigins(process.env.ALLOWED_ORIGINS);
+  if (process.env.RENDER === 'true') {
+    const externalUrl = process.env.RENDER_EXTERNAL_URL;
+    if (!externalUrl || !externalUrl.startsWith('https://') || externalUrl.includes(',')) {
+      throw Error('RENDER_EXTERNAL_URL must be one exact HTTPS origin.');
+    }
+    for (const origin of parseOrigins(externalUrl)) origins.add(origin);
+  }
   origins.add('http://localhost:' + port);
   origins.add('http://127.0.0.1:' + port);
   const server = createServer({ origins, ...backendOptions });

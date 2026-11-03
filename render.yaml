@@ -1,0 +1,15 @@
+services:
+  - type: web
+    name: neon-parry
+    runtime: docker
+    plan: free
+    region: singapore
+    branch: main
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: .
+    healthCheckPath: /health
+    autoDeployTrigger: commit
+    numInstances: 1
+    envVars:
+      - key: ALLOWED_ORIGINS
+        value: https://jooyoungfe.github.io
