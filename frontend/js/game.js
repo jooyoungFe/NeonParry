@@ -305,6 +305,7 @@ function advanceStage(){
   runSelection={mode:'stage',difficulty:activeRun.difficulty,stage:activeRun.stage+1,skill:retrySkill||activeRun.skill};launchRun();
 }
 function returnToMenu(){
+  if(window.NeonDuel?.isActive()){window.NeonDuel.leave(true);return;}
   pauseGame();pointers.clear();
   if(typeof showMenuView==='function')showMenuView();
   if(typeof refreshMenu==='function')refreshMenu();
@@ -401,7 +402,7 @@ function enemyPosition(enemy) {
 }
 function renderEnemy(enemy) {
   const visible=enemy.state==='dormant'||enemy.state==='echo'||enemy.hop||enemy.push||clock>=enemy.at;
-  if(visible&&typeof discover==='function')discover('enemy',enemy.kind==='echo'?'trojan':enemy.kind);
+  if(visible&&!enemy.duelVisual&&typeof discover==='function')discover('enemy',enemy.kind==='echo'?'trojan':enemy.kind);
   enemy.node.setAttribute('visibility',visible?'visible':'hidden');
   const position=enemyPosition(enemy);enemy.radius=position.radius;enemy.x=position.x;enemy.y=position.y;
   enemy.node.setAttribute('transform',`translate(${position.x} ${position.y})`);
@@ -969,6 +970,7 @@ function loop(now) {
   if (mode === 'running') frame = requestAnimationFrame(loop);
 }
 $('action').addEventListener('click',()=>{
+  if(window.NeonDuel?.isActive()){window.NeonDuel.action();return;}
   if(($('help-dialog').open||$('patch-dialog').open))return;
   if (mode==='running') pauseGame(); else if (mode==='paused') resumeGame(); else replayRun();
 });
@@ -1006,6 +1008,7 @@ $('skill').addEventListener('click',()=>activateSkill());
 // Native keyboard/assistive-technology activation of each direction button.
 for (const button of document.querySelectorAll('[data-dir]')) button.addEventListener('click',event=>{if(event.detail===0){if(proxyArmed)activateSkill(button.dataset.dir);else parry(button.dataset.dir);}});
 document.addEventListener('keydown',event=>{
+  if(window.NeonDuel?.isActive())return;
   if (($('help-dialog').open||$('patch-dialog').open)) return;
   if($('game-view')?.hidden)return;
   if(event.code==='Escape'&&$('game-shell').classList.contains('expanded')){event.preventDefault();leaveFullscreen();return;}

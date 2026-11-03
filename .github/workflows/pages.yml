@@ -17,14 +17,16 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@v4
-      - name: Build standalone backend container
-        run: docker build -t neon-parry-backend ./backend
+      - name: Build game and API server container
+        run: docker build -f backend/Dockerfile -t neon-parry-backend .
       - name: Verify backend health
         run: |
           docker run -d --name neon-backend -p 127.0.0.1:8080:8080 neon-parry-backend
           for attempt in $(seq 1 20); do
             if curl --fail --silent http://127.0.0.1:8080/health > /tmp/health.json; then
               python3 -c 'import json; assert json.load(open("/tmp/health.json"))["status"] == "ok"'
+              curl --fail --silent http://127.0.0.1:8080/ > /tmp/neon-game.html
+              python3 -c 'assert "id=\"fighter\"" in open("/tmp/neon-game.html").read()'
               exit 0
             fi
             sleep 1

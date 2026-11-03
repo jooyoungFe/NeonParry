@@ -1,14 +1,47 @@
 'use strict';
 const http=require('node:http');
 const{RoomStore,ApiError}=require('./rooms.cjs');
+const{MatchmakingStore}=require('./matchmaking.cjs');
 const DEFAULT_ORIGINS=['http://localhost:8000','http://127.0.0.1:8000','https://qqock2e.github.io'];
 function parseOrigins(text){
   const values=text===undefined?DEFAULT_ORIGINS:text.split(',').map(s=>s.trim()).filter(Boolean);
   for(const origin of values){let url;try{url=new URL(origin);}catch{throw Error('Invalid ALLOWED_ORIGINS origin.');}if(!['http:','https:'].includes(url.protocol)||url.origin!==origin)throw Error('ALLOWED_ORIGINS must contain exact HTTP(S) origins without paths.');}
   return new Set(values);
 }
-function createServer({store=new RoomStore(),origins=parseOrigins(process.env.ALLOWED_ORIGINS),rateLimit=300}={}){
-  const buckets=new Map();
+function createServer({store=new RoomStore(),matchmaking,origins=parseOrigins(process.env.ALLOWED_ORIGINS),rateLimit=300,inputRateLimit=1800,matchmakingRateLimit=30,tickMs=33}={}){
+  const buckets=new Map(),streams=new Map();let battleTimer=null;
+  function stopTimer(){if(!streams.size&&battleTimer){clearInterval(battleTimer);battleTimer=null;}}
+  function sendState(code,state){
+    const viewers=streams.get(code);if(!viewers)return;
+    const frame='event: state\ndata: '+JSON.stringify(state)+'\n\n';
+    for(const viewer of [...viewers]){if(viewer.res.destroyed||viewer.res.writableEnded)continue;if(!viewer.res.write(frame))viewer.res.destroy();}
+    if(state.battle.status==='finished')for(const viewer of [...viewers])viewer.res.end();
+  }
+  function closeStreams(code){const viewers=streams.get(code);if(viewers)for(const viewer of [...viewers])viewer.res.end();}
+  function leaveMember(code,token){const final=store.forfeit(code,token);if(final)sendState(code,final);closeStreams(code);return store.leave(code,token);}
+  function tick(){
+    for(const [code,viewers]of streams){
+      const room=store.rooms.get(code);
+      if(!room||!room.battle){closeStreams(code);continue;}
+      if([...viewers].some(viewer=>!viewer.res.destroyed))room.touchedAt=store.now();
+      sendState(code,store.battleSnapshot(room));
+    }
+    stopTimer();
+  }
+  function startStream(code,token,req,res){
+    matchmakingStore.prune();
+    const{room,entry,battle}=store.connect(code,token);
+    if(room.presence.get(entry.id).connections>2){store.disconnect(room,entry.id);throw new ApiError(429,'STREAM_LIMIT','At most two battle connections are allowed per player.');}
+    matchmakingStore.handoff(code,entry.id);
+    res.writeHead(200,{'Content-Type':'text/event-stream; charset=utf-8','Cache-Control':'no-store, no-transform','Connection':'keep-alive','X-Accel-Buffering':'no','X-Content-Type-Options':'nosniff'});
+    res.flushHeaders();req.socket.setNoDelay(true);
+    const viewer={res,playerId:entry.id,room};let viewers=streams.get(code);if(!viewers){viewers=new Set();streams.set(code,viewers);}viewers.add(viewer);
+    res.on('error',()=>res.destroy());
+    res.once('close',()=>{viewers.delete(viewer);store.disconnect(room,entry.id,battle);if(!viewers.size)streams.delete(code);stopTimer();});
+    sendState(code,store.battleSnapshot(room));
+    if(!battleTimer){battleTimer=setInterval(tick,tickMs);battleTimer.unref();}
+  }
+  const matchmakingStore=matchmaking||new MatchmakingStore({rooms:store,onAbandon:member=>leaveMember(member.code,member.playerToken)});
   const server=http.createServer(async(req,res)=>{
     const json=(status,body)=>{res.writeHead(status,{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store','X-Content-Type-Options':'nosniff'});res.end(JSON.stringify(body));};
     res.setHeader('Vary','Origin');
@@ -19,10 +52,10 @@ function createServer({store=new RoomStore(),origins=parseOrigins(process.env.AL
       if(req.method==='OPTIONS'){res.writeHead(204,{'Access-Control-Allow-Methods':'GET,POST,DELETE,OPTIONS','Access-Control-Allow-Headers':'Authorization,Content-Type','Access-Control-Max-Age':'600'});res.end();return;}
       const url=new URL(req.url,'http://service.local');
       if(req.method==='GET'&&url.pathname==='/health'){json(200,{status:'ok',apiVersion:1,storage:'memory'});return;}
-      const ip=req.socket.remoteAddress||'unknown',now=Date.now();
+      const ip=req.socket.remoteAddress||'unknown',now=Date.now(),isInput=req.method==='POST'&&/^\/api\/v1\/rooms\/[A-Z2-9]{6}\/input$/.test(url.pathname),isEnrollment=req.method==='POST'&&url.pathname==='/api/v1/matchmaking',bucketKey=ip+(isInput?':input':isEnrollment?':matchmaking':':lobby');
       for(const [key,b]of buckets)if(now>=b.resetAt)buckets.delete(key);
-      const bucket=buckets.get(ip)||{count:0,resetAt:now+60000};bucket.count++;buckets.set(ip,bucket);
-      if(bucket.count>rateLimit){res.setHeader('Retry-After',Math.ceil((bucket.resetAt-now)/1000));throw new ApiError(429,'RATE_LIMITED','Too many requests.');}
+      const bucket=buckets.get(bucketKey)||{count:0,resetAt:now+60000};bucket.count++;buckets.set(bucketKey,bucket);
+      if(bucket.count>(isInput?inputRateLimit:isEnrollment?matchmakingRateLimit:rateLimit)){res.setHeader('Retry-After',Math.ceil((bucket.resetAt-now)/1000));throw new ApiError(429,'RATE_LIMITED','Too many requests.');}
       const body=async()=>{
         if(!((req.headers['content-type']||'').split(';')[0].trim().toLowerCase()==='application/json'))throw new ApiError(415,'JSON_REQUIRED','Use application/json.');
         const chunks=[];let size=0;
@@ -32,16 +65,28 @@ function createServer({store=new RoomStore(),origins=parseOrigins(process.env.AL
         if(!data||typeof data!=='object'||Array.isArray(data))throw new ApiError(400,'INVALID_BODY','Expected an object.');return data;
       };
       const name=data=>{const value=data.name===undefined?'Player':data.name;if(typeof value!=='string'||!value.trim()||value.trim().length>24||/[\u0000-\u001f\u007f]/.test(value))throw new ApiError(400,'INVALID_NAME','Name must be 1–24 characters without control characters.');return value.trim();};
+      if(req.method==='POST'&&url.pathname==='/api/v1/matchmaking'){json(201,matchmakingStore.find(name(await body())));return;}
+      const ticketRoute=url.pathname.match(/^\/api\/v1\/matchmaking\/([a-f0-9]{24})$/);
+      if(ticketRoute){
+        const auth=(req.headers.authorization||'').match(/^Bearer ([A-Za-z0-9_-]{43})$/);
+        if(!auth)throw new ApiError(401,'TOKEN_REQUIRED','A matchmaking ticket token is required.');
+        if(req.method==='GET'){json(200,matchmakingStore.status(ticketRoute[1],auth[1]));return;}
+        if(req.method==='DELETE'){json(200,matchmakingStore.cancel(ticketRoute[1],auth[1]));return;}
+        throw new ApiError(405,'METHOD_NOT_ALLOWED','Method not allowed.');
+      }
       if(req.method==='POST'&&url.pathname==='/api/v1/rooms'){json(201,store.create(name(await body())));return;}
-      const route=url.pathname.match(/^\/api\/v1\/rooms\/([A-Z2-9]{6})(?:\/(join|ready))?$/);
+      const route=url.pathname.match(/^\/api\/v1\/rooms\/([A-Z2-9]{6})(?:\/(join|ready|input|battle(?:\/state)?))?$/);
       if(!route)throw new ApiError(404,'NOT_FOUND','Unknown endpoint.');
       const[,code,action]=route;
       if(req.method==='POST'&&action==='join'){json(201,store.join(code,name(await body())));return;}
       const match=(req.headers.authorization||'').match(/^Bearer ([A-Za-z0-9_-]{43})$/);
       if(!match)throw new ApiError(401,'TOKEN_REQUIRED','A room player token is required.');
       const token=match[1];
+      if(req.method==='GET'&&action==='battle'){startStream(code,token,req,res);return;}
+      if(req.method==='GET'&&action==='battle/state'){json(200,store.battleState(code,token));return;}
+      if(req.method==='POST'&&action==='input'){const result=store.input(code,token,await body());json(200,result);sendState(code,result.state);return;}
       if(req.method==='GET'&&!action){json(200,store.status(code,token));return;}
-      if(req.method==='DELETE'&&!action){json(200,store.leave(code,token));return;}
+      if(req.method==='DELETE'&&!action){json(200,leaveMember(code,token));return;}
       if(req.method==='POST'&&action==='ready'){const data=await body();if(typeof data.ready!=='boolean')throw new ApiError(400,'INVALID_READY','Ready must be a boolean.');json(200,store.ready(code,token,data.ready));return;}
       throw new ApiError(405,'METHOD_NOT_ALLOWED','Method not allowed.');
     }catch(error){
@@ -50,7 +95,7 @@ function createServer({store=new RoomStore(),origins=parseOrigins(process.env.AL
     }
   });
   server.requestTimeout=15000;server.headersTimeout=10000;server.maxHeadersCount=32;
-  const timer=setInterval(()=>store.prune(),60000);timer.unref();server.once('close',()=>clearInterval(timer));
+  const timer=setInterval(()=>{matchmakingStore.prune();store.prune();},1000);timer.unref();server.once('close',()=>{clearInterval(timer);if(battleTimer)clearInterval(battleTimer);});
   return server;
 }
 if(require.main===module){

@@ -9,7 +9,8 @@
 
 <!-- Game by qqock2e: https://qqock2e.itch.io/neon-parry -->
 <!-- Renderer for the Electron app. -->
-<link rel="stylesheet" href="styles.css?v=1.2.0">
+<link rel="stylesheet" href="styles.css?v=1.3.1">
+<link rel="stylesheet" href="duel.css?v=1.3.1">
 </head>
 <body>
 <main id="game-shell">
@@ -32,11 +33,12 @@
         <button id="help-open" class="menu-button" aria-haspopup="dialog">Help</button>
         <button id="achievements-open" class="menu-button">Achievements</button>
         <button id="menu-settings" class="menu-button">Settings</button>
-        <button id="patch-open" class="patch-link" aria-haspopup="dialog">Patch notes · 1.2.0</button>
+        <button id="patch-open" class="patch-link" aria-haspopup="dialog">Patch notes · 1.3.1</button>
       </div>
     </div>
     <div class="menu-screen" data-menu-screen="mode" hidden>
       <div class="menu-list mode-list" role="group" aria-labelledby="menu-title">
+        <button id="menu-duel" class="menu-button"><strong>Duel / 듀얼</strong></button>
         <button class="menu-button" data-menu-mode="stage" aria-pressed="false"><strong>Stages</strong></button>
         <button class="menu-button" data-menu-mode="rush" aria-pressed="false"><strong>Boss rush</strong></button>
         <button class="menu-button" data-menu-mode="endless" aria-pressed="true"><strong>Endless</strong></button>
@@ -79,6 +81,28 @@
         <div class="settings-row"><span id="settings-display-label">Display</span><button id="fullscreen" class="tool-button" aria-pressed="false">Full screen</button></div>
       </div>
     </div>
+  </div>
+</section>
+
+<section id="duel-view" class="menu-view" hidden aria-labelledby="duel-title">
+  <div class="menu-board" data-screen="duel">
+    <svg class="menu-lines" viewBox="0 0 480 480" aria-hidden="true"><path d="M240 40V440 M40 240H440" fill="none" stroke="#66765e" stroke-dasharray="2 9"/><circle cx="240" cy="240" r="173" fill="none" stroke="#66765e"/><circle cx="240" cy="240" r="104" fill="none" stroke="#66765e"/></svg>
+    <div class="menu-top"><button id="duel-back" class="duel-back">← Back</button></div>
+    <h2 id="duel-title" tabindex="-1">Duel / 듀얼</h2>
+    <div id="duel-setup" class="menu-screen">
+      <div class="menu-list">
+        <button id="duel-random" class="menu-button primary">Find opponent</button>
+        <button id="duel-create" class="menu-button">Create room</button>
+        <div class="duel-join"><input id="duel-code-input" maxlength="6" placeholder="ABC234" aria-label="Room code" autocomplete="off" autocapitalize="characters" spellcheck="false"><button id="duel-join" class="tool-button">Join</button></div>
+        <button id="duel-practice" class="menu-button">Practice vs CPU</button>
+        <label class="duel-level" for="duel-cpu-level"><span id="duel-level-label">Practice opponent</span><select id="duel-cpu-level"><option value="rookie">Rookie / 입문</option><option value="normal" selected>Rival / 대등</option><option value="expert">Expert / 숙련</option></select></label>
+      </div>
+      <p id="duel-online-note" class="menu-small"></p>
+      <details class="duel-settings"><summary id="duel-settings-label">Connection settings</summary><label for="duel-name" id="duel-name-label">Name</label><input id="duel-name" maxlength="24" value="Player" autocomplete="nickname"><label for="duel-server-url" id="duel-server-url-label">Server address</label><input id="duel-server-url" type="url" placeholder="https://…" autocomplete="off" spellcheck="false"></details>
+    </div>
+    <div id="duel-matching" class="menu-screen" hidden><p id="duel-matching-label">Finding opponent…</p><p id="duel-matching-note" class="menu-small"></p><button id="duel-cancel" class="menu-button">Cancel</button></div>
+    <div id="duel-room" class="menu-screen" hidden><p id="duel-room-label" class="menu-small">Room code</p><button id="duel-room-code" class="menu-button"></button><p id="duel-room-hint" class="menu-small"></p><ul id="duel-players"></ul><button id="duel-ready" class="menu-button primary">Ready</button><button id="duel-leave" class="menu-button">Leave room</button></div>
+    <p id="duel-feedback" class="menu-small" role="status" aria-live="polite"></p>
   </div>
 </section>
 
@@ -141,14 +165,17 @@
 </section><footer></footer>
 </div>
 <dialog id="help-dialog" aria-labelledby="help-title"><div class="dialog-heading"><h2 id="help-title">How to play</h2><button id="help-close" class="tool-button" autofocus>Close ×</button></div><div id="help-content"></div></dialog>
-<dialog id="patch-dialog" aria-labelledby="patch-title"><div class="dialog-heading"><h2 id="patch-title">Patch notes · 1.2.0</h2><button id="patch-close" class="tool-button" autofocus>Close ×</button></div><div id="patch-content"></div></dialog>
+<dialog id="patch-dialog" aria-labelledby="patch-title"><div class="dialog-heading"><h2 id="patch-title">Patch notes · 1.3.1</h2><button id="patch-close" class="tool-button" autofocus>Close ×</button></div><div id="patch-content"></div></dialog>
 <p id="achievement-toast" class="achievement-toast" role="status" hidden></p>
 </main>
-<script src="config.js?v=1.2.0"></script>
-<script src="js/online-client.js?v=1.2.0"></script>
-<script src="js/game.js?v=1.2.0"></script>
-<script src="js/features.js?v=1.2.0"></script>
-<script src="js/menu.js?v=1.2.0"></script>
-<script src="js/desktop.js?v=1.2.0"></script>
+<script src="config.js?v=1.3.1"></script>
+<script src="js/online-client.js?v=1.3.1"></script>
+<script src="js/game.js?v=1.3.1"></script>
+<script src="js/features.js?v=1.3.1"></script>
+<script src="js/menu.js?v=1.3.1"></script>
+<script src="js/duel-engine.js?v=1.3.1"></script>
+<script src="js/duel-view.js?v=1.3.1"></script>
+<script src="js/duel.js?v=1.3.1"></script>
+<script src="js/desktop.js?v=1.3.1"></script>
 </body>
 </html>

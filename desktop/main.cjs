@@ -21,9 +21,13 @@ const ASSETS = new Map([
   ['/config.js', ['config.js', 'text/javascript; charset=utf-8']],
   ['/js/online-client.js', ['js/online-client.js', 'text/javascript; charset=utf-8']],
   ['/styles.css', ['styles.css', 'text/css; charset=utf-8']],
+  ['/duel.css', ['duel.css', 'text/css; charset=utf-8']],
   ['/js/game.js', ['js/game.js', 'text/javascript; charset=utf-8']],
   ['/js/features.js', ['js/features.js', 'text/javascript; charset=utf-8']],
   ['/js/menu.js', ['js/menu.js', 'text/javascript; charset=utf-8']],
+  ['/js/duel-engine.js', ['js/duel-engine.js', 'text/javascript; charset=utf-8']],
+  ['/js/duel-view.js', ['js/duel-view.js', 'text/javascript; charset=utf-8']],
+  ['/js/duel.js', ['js/duel.js', 'text/javascript; charset=utf-8']],
   ['/js/desktop.js', ['js/desktop.js', 'text/javascript; charset=utf-8']],
   ['/assets/icon-512.png', ['assets/icon-512.png', 'image/png']],
 ]);
