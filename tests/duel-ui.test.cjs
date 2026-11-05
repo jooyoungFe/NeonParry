@@ -26,13 +26,19 @@ function click(game,id){return game.element(id).listeners.get('click').at(-1)();
 function startPractice(game){game.element('menu-duel').click();game.element('duel-cpu-level').value='normal';game.element('duel-practice').click();frame(game,0);}
 function fireTimer(game,ms){return game.run(`(()=>{const entry=[...window.__timers].find(([,timer])=>timer.ms===${ms});if(!entry)throw Error('Missing timer');window.__timers.delete(entry[0]);return entry[1].callback();})()`);}
 
-test('duel lobby opens the original arena, fighter and sidebar without a second battle scene',()=>{
+test('duel keeps the original playable arena and opens a read-only opponent preview',()=>{
   const game=createDuel(),arena=game.element('arena'),fighter=game.element('fighter'),enemies=game.element('enemies');
+  const opponent=game.element('duel-opponent'),opponentArena=game.element('duel-opponent-arena');
   for(const id of['duel-arena','duel-fighter','duel-projectiles','duel-battle'])assert.equal(game.element(id),null,id+' must not duplicate the original scene');
-  assert.equal(game.run("document.querySelectorAll('#arena').length"),1);assert.equal(game.run("document.querySelectorAll('#fighter').length"),1);
+  assert.equal(opponent.hidden,true);
   game.element('menu-duel').click();assert.equal(game.element('duel-view').hidden,false);assert.equal(game.element('game-view').hidden,true);assert.equal(game.element('main-menu').hidden,true);
+  assert.equal(opponent.hidden,true);
   game.element('duel-practice').click();frame(game,0);
   assert.equal(game.element('duel-view').hidden,true);assert.equal(game.element('game-view').hidden,false);assert.equal(game.element('arena'),arena);assert.equal(game.element('fighter'),fighter);assert.equal(game.element('enemies'),enemies);
+  assert.equal(opponent.hidden,false);assert.ok(opponentArena.querySelector('.fighter'));
+  assert.equal(game.run("document.querySelectorAll('#arena').length"),1);assert.equal(game.run("document.querySelectorAll('#fighter').length"),1);
+  assert.equal(opponentArena.querySelectorAll('[data-dir]').length,0);
+  assert.equal(game.element('duel-opponent-name').textContent,'CPU');
   assert.equal(game.element('overlay-title').textContent,'3');assert.equal(game.element('score-label').textContent,'Defenses');assert.equal(game.element('vulnerability-value').textContent,'0%');assert.equal(game.element('best').textContent,'0%');
   assert.match(game.element('run-label').textContent,/CPU practice/);assert.equal(game.element('share').hidden,true);
   key(game,'ArrowUp',{shiftKey:true});assert.equal(game.element('message').textContent,'');
@@ -45,15 +51,21 @@ test('original skill button and Space select one attack while Shift attacks with
   game.element('skill').click();assert.equal(game.element('skill').getAttribute('aria-pressed'),'true');assert.equal(game.element('arena').dataset.stance,'attack');
   key(game,'ArrowRight');frame(game);assert.match(game.element('message').textContent,/Attack sent →/);assert.equal(game.element('skill').getAttribute('aria-pressed'),'false');assert.equal(game.element('arena').dataset.stance,'guard');
   assert.equal(game.element('fighter').dataset.pose,'right');assert.ok(game.element('effects').children.length>0);
+  const opponentArena=game.element('duel-opponent-arena');
+  assert.equal(opponentArena.querySelectorAll('[data-kind="virus"]').length,1);
+  assert.equal(opponentArena.querySelector('[data-kind="virus"]').getAttribute('visibility'),'visible');
+  assert.equal(game.element('enemies').children.length,0);
   key(game,'Space');assert.equal(game.element('arena').dataset.stance,'attack');key(game,'Space',{repeat:true});assert.equal(game.element('arena').dataset.stance,'attack');key(game,'Space');assert.equal(game.element('arena').dataset.stance,'guard');
   advance(game,350);key(game,'ArrowDown',{shiftKey:true,repeat:true});frame(game);assert.match(game.element('message').textContent,/Attack sent →/);
   key(game,'ArrowDown',{shiftKey:true});frame(game);assert.match(game.element('message').textContent,/Attack sent ↓/);assert.equal(game.element('arena').dataset.stance,'guard');
   assert.equal(game.element('fighter').dataset.pose,'down');assert.equal(game.element('enemies').children.length,0,'outgoing commands never become incoming scene actors');
+  assert.equal(opponentArena.querySelectorAll('[data-kind="virus"]').length,2);
 });
 
 test('CPU attacks use the original Virus actor, 2200ms movement and original perfect-parry effects',()=>{
   const game=createDuel();startPractice(game);advance(game,2800);
   const actor=game.run('enemies[0]');assert.equal(game.element('enemies').children.length,1);assert.equal(actor.kind,'virus');assert.equal(actor.node.getAttribute('data-kind'),'virus');assert.equal(actor.at,2800);assert.equal(actor.arrival,5000);assert.equal(actor.travel,2200);
+  assert.equal(game.element('duel-opponent-arena').querySelectorAll('[data-kind="virus"]').length,0,'CPU attack travels in the local arena only');
   assert.equal(actor.outline.getAttribute('d'),game.run("shapePath('virus')"));assert.equal(actor.node.parentNode,game.element('enemies'));
   advance(game,2200);key(game,'ArrowLeft');frame(game,0);
   assert.match(game.element('message').textContent,/Perfect/);assert.equal(game.element('score').textContent,'1');assert.equal(game.element('vulnerability-value').textContent,'0%');assert.equal(game.element('best').textContent,'0%');
@@ -61,11 +73,16 @@ test('CPU attacks use the original Virus actor, 2200ms movement and original per
   advance(game,200);assert.equal(game.element('vulnerability').getAttribute('aria-valuenow'),'0');
 });
 
-test('vulnerability ends CPU practice in the original overlay and action retries a fresh countdown',()=>{
-  const game=createDuel();startPractice(game);advance(game,14000);
+test('vulnerability ends CPU practice and retry resets both arenas for a fresh countdown',()=>{
+  const game=createDuel();startPractice(game);advance(game,2200);
+  key(game,'ArrowRight',{shiftKey:true});advance(game,11800);
   assert.equal(game.element('vulnerability-value').textContent,'100%');assert.equal(game.element('overlay-title').textContent,'Core disconnected');assert.equal(game.element('action').textContent,'Retry');assert.equal(game.element('overlay').hidden,false);
+  assert.equal(game.element('duel-opponent-vulnerability').textContent,'15%');
   game.element('action').click();frame(game,0);
   assert.equal(game.element('overlay-title').textContent,'3');assert.equal(game.element('vulnerability-value').textContent,'0%');assert.equal(game.element('best').textContent,'0%');assert.equal(game.element('skill-meter').getAttribute('aria-valuenow'),'2.00');assert.equal(game.element('enemies').children.length,0);
+  assert.equal(game.element('duel-opponent').hidden,false);
+  assert.equal(game.element('duel-opponent-vulnerability').textContent,'0%');
+  assert.equal(game.element('duel-opponent-arena').querySelectorAll('[data-kind="virus"]').length,0);
 });
 
 test('returning from duel restores paused single-player globals, exact enemy nodes, sprite paths and storage',async()=>{
@@ -76,6 +93,8 @@ test('returning from duel restores paused single-player globals, exact enemy nod
   assert.equal(game.run("window.__soloEnemyNode.parentNode===null"),true);
   game.element('menu-open').click();await settle();
   assert.equal(game.element('duel-view').hidden,true);assert.equal(game.element('main-menu').hidden,false);assert.equal(game.run('window.NeonDuel.isActive()'),false);
+  assert.equal(game.element('duel-opponent').hidden,true);
+  assert.equal(game.element('duel-opponent-arena').children.length,0);
   assert.deepEqual(game.plain('({runSelection,activeRun,score,clock,vulnerability,charge,mode,GUARD_WINDOW,PERFECT_WINDOW,COOLDOWN})'),original);assert.deepEqual(game.snapshotStorage(),storage);
   assert.equal(game.run("enemies===window.__soloEnemies&&enemies[0]===window.__soloEnemy&&enemies[0].node===window.__soloEnemyNode&&window.__soloEnemyNode.parentNode===$('enemies')"),true);
   assert.equal(game.run("$('arena')===window.__soloArena&&$('fighter')===window.__soloFighter&&[...$('fighter').querySelectorAll('path')].every((node,index)=>node===window.__soloSpriteNodes[index]&&node.getAttribute('d')===window.__soloSpritePaths[index])"),true);
@@ -111,6 +130,44 @@ function installOnline(game){
   game.element('menu-duel').click();game.element('duel-server-url').value='https://duel.example';
 }
 async function startOnline(game){installOnline(game);await click(game,'duel-create');await click(game,'duel-ready');frame(game,0);}
+
+test('online snapshots show the opponent parrying and taking damage on the right only',async()=>{
+  const game=createDuel();await startOnline(game);
+  const opponentArena=game.element('duel-opponent-arena'),opponentFighter=opponentArena.querySelector('.fighter');
+  assert.equal(game.element('duel-opponent-name').textContent,'Other');
+  game.run(`
+    window.__realMatch=NeonDuelEngine.createMatch({players:['me','other'],startAt:10000});
+    window.__publishDuel=at=>{
+      window.__now=at;
+      window.__callbacks.onState({room:window.__room,battle:NeonDuelEngine.snapshot(window.__realMatch,at),serverTime:at});
+    };
+    NeonDuelEngine.input(window.__realMatch,'me',{type:'attack',dir:'up'},10000);
+    window.__publishDuel(10100);
+  `);frame(game);
+  assert.ok(opponentArena.querySelector('[data-kind="virus"]'));
+  assert.equal(game.element('enemies').children.length,0);
+
+  game.run("NeonDuelEngine.input(window.__realMatch,'other',{type:'guard',dir:'up'},12200);window.__publishDuel(12200);");frame(game);
+  assert.equal(opponentArena.querySelector('[data-kind="virus"]'),null);
+  assert.equal(opponentFighter.dataset.pose,'up');
+  assert.equal(opponentFighter.dataset.flash,'true');
+  assert.equal(game.element('fighter').dataset.pose,'idle');
+  assert.equal(game.element('score').textContent,'0');
+  assert.equal(game.element('duel-opponent-vulnerability').textContent,'0%');
+
+  game.run("NeonDuelEngine.input(window.__realMatch,'me',{type:'attack',dir:'right'},12550);window.__publishDuel(12600);");frame(game);
+  assert.ok(opponentArena.querySelector('[data-kind="virus"]'));
+  game.run('window.__publishDuel(15112);');frame(game);
+  assert.equal(opponentArena.querySelector('[data-kind="virus"]'),null);
+  assert.ok(opponentArena.querySelector('[data-fx="damage"]'));
+  assert.equal(game.element('arena').querySelector('[data-fx="damage"]'),null);
+  assert.equal(game.element('duel-opponent-vulnerability').textContent,'15%');
+  assert.equal(game.element('vulnerability-value').textContent,'0%');
+
+  game.run('window.__publishDuel(15500);');frame(game);
+  assert.equal(opponentArena.querySelector('[data-fx="damage"]'),null,'new snapshots do not replay the same damage effect');
+  assert.equal(game.element('duel-opponent-vulnerability').textContent,'15%');
+});
 
 test('an older SSE snapshot cannot undo a newer authoritative input response in the original sidebar',async()=>{
   const game=createDuel();await startOnline(game);

@@ -365,15 +365,18 @@ function shapePath(kind,inset=0) {
   if(kind==='ransom')return `M${-r+3} -4V${r-1}H${r-3}V-4Z M-6 -4V-9L0 -13L6 -9V-4`;
   return `M${-r} 0L${-r*.5} ${-r*.85}H${r*.5}L${r} 0L${r*.5} ${r*.85}H${-r*.5}Z`;
 }
-function spawnEnemy(dir, at=clock, travel=TRAVEL_TIME, kind='virus',options={}) {
+function createEnemyActor(dir,at,travel,kind,options={}) {
   const color=TYPES[kind].color,group=svg('g',{'data-kind':kind});
   const outline=svg('path',{d:shapePath(kind),fill:'#171a1b',stroke:color,'stroke-width':1.25});
   const fill=svg('path',{d:shapePath(kind,2),fill:color,stroke:kind==='ransom'?color:'none','stroke-width':.5});
   group.append(outline,fill);
   if(kind==='ransom')group.append(svg('path',{d:'M0 3V8',stroke:'#171a1b','stroke-width':2}));
   const count=svg('text',{x:0,y:-19,class:'enemy-count'});group.append(count);
+  return {dir,at,travel,kind,node:group,fill,outline,count,radius:options.startRadius||START_RADIUS,startRadius:options.startRadius||START_RADIUS,arrival:options.arrival??at+travel,state:options.state||'moving',trojan:!!options.trojan,remaining:options.remaining||0,spawned:false,...options};
+}
+function spawnEnemy(dir, at=clock, travel=TRAVEL_TIME, kind='virus',options={}) {
+  const enemy=createEnemyActor(dir,at,travel,kind,options),group=enemy.node;
   $('enemies').append(group);
-  const enemy={dir,at,travel,kind,node:group,fill,outline,count,radius:options.startRadius||START_RADIUS,startRadius:options.startRadius||START_RADIUS,arrival:options.arrival??at+travel,state:options.state||'moving',trojan:!!options.trojan,remaining:options.remaining||0,spawned:false,...options};
   if(kind==='phishing'){
     enemy.revealed=false;enemy.mirror=group.cloneNode(true);enemy.mirror.setAttribute('data-role','phishing-body');
     enemy.mirror.setAttribute('opacity','.5');enemy.mirror.firstElementChild.setAttribute('stroke-dasharray','2 3');
@@ -381,36 +384,40 @@ function spawnEnemy(dir, at=clock, travel=TRAVEL_TIME, kind='virus',options={}) 
   }
   enemies.push(enemy);renderEnemy(enemy);return enemy;
 }
-function enemyPosition(enemy) {
+function enemyPosition(enemy,now=clock) {
   const [dx,dy]=DIRECTIONS[enemy.dir];
-  if(enemy.push&&clock<enemy.push.until){const t=Math.max(0,(clock-enemy.push.at)/(enemy.push.until-enemy.push.at)),radius=enemy.push.from+(enemy.push.to-enemy.push.from)*(1-(1-t)**3);return{x:240+dx*radius,y:240+dy*radius,radius};}
+  if(enemy.push&&now<enemy.push.until){const t=Math.max(0,(now-enemy.push.at)/(enemy.push.until-enemy.push.at)),radius=enemy.push.from+(enemy.push.to-enemy.push.from)*(1-(1-t)**3);return{x:240+dx*radius,y:240+dy*radius,radius};}
   if(enemy.state==='echo') {
-    const t=Math.min(1,Math.max(0,(clock-enemy.at)/enemy.travel));
+    const t=Math.min(1,Math.max(0,(now-enemy.at)/enemy.travel));
     const radius=IMPACT_RADIUS+Math.sin(t*Math.PI)*56-t*IMPACT_RADIUS;
     return{x:240+dx*radius,y:240+dy*radius,radius};
   }
-  if(enemy.hop && clock<enemy.hop.until) {
-    const t=Math.max(0,(clock-enemy.hop.at)/(enemy.hop.until-enemy.hop.at)),u=1-t;
+  if(enemy.hop && now<enemy.hop.until) {
+    const t=Math.max(0,(now-enemy.hop.at)/(enemy.hop.until-enemy.hop.at)),u=1-t;
     const dest={x:240+dx*enemy.startRadius,y:240+dy*enemy.startRadius};
     return{x:u*u*enemy.hop.x+2*u*t*240+t*t*dest.x,y:u*u*enemy.hop.y+2*u*t*240+t*t*dest.y,radius:enemy.startRadius};
   }
   if(enemy.state==='dormant')return{x:240+dx*enemy.startRadius,y:240+dy*enemy.startRadius,radius:enemy.startRadius};
-  const progress=Math.max(0,(clock-enemy.at)/enemy.travel);
+  const progress=Math.max(0,(now-enemy.at)/enemy.travel);
   const movement=enemy.kind==='worm'?progress*progress:progress;
   const radius=enemy.startRadius-(enemy.startRadius-TARGET_RADIUS)*movement;
   return{x:240+dx*radius,y:240+dy*radius,radius};
 }
-function renderEnemy(enemy) {
-  const visible=enemy.state==='dormant'||enemy.state==='echo'||enemy.hop||enemy.push||clock>=enemy.at;
-  if(visible&&!enemy.duelVisual&&typeof discover==='function')discover('enemy',enemy.kind==='echo'?'trojan':enemy.kind);
+function paintEnemy(enemy,now=clock) {
+  const visible=enemy.state==='dormant'||enemy.state==='echo'||enemy.hop||enemy.push||now>=enemy.at;
   enemy.node.setAttribute('visibility',visible?'visible':'hidden');
-  const position=enemyPosition(enemy);enemy.radius=position.radius;enemy.x=position.x;enemy.y=position.y;
+  const position=enemyPosition(enemy,now);enemy.radius=position.radius;enemy.x=position.x;enemy.y=position.y;
   enemy.node.setAttribute('transform',`translate(${position.x} ${position.y})`);
-  const progress=enemy.state==='dormant'?0:Math.max(0,(clock-enemy.at)/enemy.travel);
+  const progress=enemy.state==='dormant'?0:Math.max(0,(now-enemy.at)/enemy.travel);
   enemy.fill.setAttribute('transform',`scale(${Math.sqrt(Math.min(1,progress))})`);
   enemy.count.textContent=enemy.state==='dormant'?enemy.remaining:enemy.kind==='worm'?'!':'';
-  const ready=enemy.state==='moving'&&(!enemy.hop||clock>=enemy.hop.until)&&(!enemy.push||clock>=enemy.push.until)&&Math.abs(clock-enemy.arrival)<=GUARD_WINDOW;
+  const ready=enemy.state==='moving'&&(!enemy.hop||now>=enemy.hop.until)&&(!enemy.push||now>=enemy.push.until)&&Math.abs(now-enemy.arrival)<=GUARD_WINDOW;
   enemy.outline.setAttribute('stroke-width',ready?2.5:1.25);enemy.outline.setAttribute('stroke',ready?'#edffe3':TYPES[enemy.kind].color);
+  return {visible,ready};
+}
+function renderEnemy(enemy) {
+  const {visible,ready}=paintEnemy(enemy);
+  if(visible&&!enemy.duelVisual&&typeof discover==='function')discover('enemy',enemy.kind==='echo'?'trojan':enemy.kind);
   if(enemy.kind==='phishing'){
     if(visible&&!enemy.revealed&&clock>=enemy.arrival-GUARD_WINDOW){enemy.revealed=true;playSound('reveal');}
     const [dx,dy]=DIRECTIONS[targetDirection(enemy)];
@@ -420,11 +427,11 @@ function renderEnemy(enemy) {
     enemy.mirror.firstElementChild.setAttribute('stroke',ready?'#ffe2c7':TYPES.phishing.color);
     enemy.mirror.children[1].setAttribute('transform',enemy.fill.getAttribute('transform'));
     enemy.link.setAttribute('visibility',visible&&enemy.revealed?'visible':'hidden');
-    enemy.link.setAttribute('d',`M${position.x} ${position.y}L${240+dx*enemy.radius} ${240+dy*enemy.radius}`);
+    enemy.link.setAttribute('d',`M${enemy.x} ${enemy.y}L${240+dx*enemy.radius} ${240+dy*enemy.radius}`);
     enemy.outline.setAttribute('stroke-width',1.25);
     if(enemy.revealed)enemy.outline.setAttribute('stroke-dasharray','1 4');
   }
-  if(visible&&!enemy.spawned){enemy.spawned=true;glitchAt(position.x,position.y,24,enemy.kind==='trojan'||enemy.kind==='echo'?'reveal':'spawn');}
+  if(visible&&!enemy.spawned){enemy.spawned=true;glitchAt(enemy.x,enemy.y,24,enemy.kind==='trojan'||enemy.kind==='echo'?'reveal':'spawn');}
 }
 function removeEnemy(enemy) {
   const index=enemies.indexOf(enemy);if(index<0)return false;
@@ -486,13 +493,13 @@ function onImpact(enemy) {
   if(enemy.kind==='ransom'&&!result.absorbed)lockedUntil[contact.dir]=clock+1200;
   if(mode==='running')releaseTrojan(contact,false);
 }
-function addEffect(dir,result) {
+function addEffect(dir,result,schedule=addTimedEffect) {
   const rotate = ROTATION[dir];
   const group = svg('g',{transform:`rotate(${rotate} 240 240)`,stroke:result==='miss'?'#e6acc9':result==='perfect'?'#b7eaaa':'#c1cec3',fill:'none'});
   group.append(svg('path',{d:'M217 29V136 M263 29V136','stroke-width':1.5}));
   if (result!=='miss') group.append(svg('path',{d:'M224 137Q240 129 256 137','stroke-width':result==='perfect'?3:1.5}));
   if (result==='perfect') group.append(svg('path',{d:'M222 122l5 -7m4 7l5 -7m4 7l5 -7','stroke-width':1.5}));
-  addTimedEffect(group,240,t=>group.setAttribute('opacity',1-t));
+  schedule(group,240,t=>group.setAttribute('opacity',1-t));
 }
 // Visual effects use game time too, so pause freezes particles and restores cleanly.
 function addTimedEffect(node,duration,draw,foreground=false) {
@@ -503,33 +510,36 @@ function shakeCamera(power) {
   if(reducedMotion.matches) return;
   shake={at:fxClock,until:fxClock+130,power};
 }
-function resetPose() {
-  $('fighter').setAttribute('transform','translate(240 240)');
-  $('fighter').dataset.pose='idle'; $('fighter').dataset.flash='false';
-  $('guard-pose').setAttribute('visibility','hidden');
-  $('guard-arm').setAttribute('d','M5 -6L17 0L12 6L1 0Z');
-  $('legs').setAttribute('d','M-7 9L-12 25L-5 25L2 15L9 25L17 25L10 7Z');
-  $('scarf').setAttribute('d','M-7 -9L-25 -5L-17 0L0 -4Z');
+function resetPose(node=$) {
+  node('fighter').setAttribute('transform','translate(240 240)');
+  node('fighter').dataset.pose='idle'; node('fighter').dataset.flash='false';
+  node('guard-pose').setAttribute('visibility','hidden');
+  node('guard-arm').setAttribute('d','M5 -6L17 0L12 6L1 0Z');
+  node('legs').setAttribute('d','M-7 9L-12 25L-5 25L2 15L9 25L17 25L10 7Z');
+  node('scarf').setAttribute('d','M-7 -9L-25 -5L-17 0L0 -4Z');
 }
 function strikePose(dir,perfect) {
-  const [dx,dy]=DIRECTIONS[dir];
   poseUntil=fxClock+170; flashUntil=fxClock+65;
-  $('fighter').dataset.pose=dir;
-  $('fighter').dataset.flash=String(!reducedMotion.matches);
+  paintStrikePose(dir,perfect,$,addTimedEffect);
+}
+function paintStrikePose(dir,perfect,node,schedule) {
+  const [dx,dy]=DIRECTIONS[dir];
+  node('fighter').dataset.pose=dir;
+  node('fighter').dataset.flash=String(!reducedMotion.matches);
   // Discrete contact pose: snap toward the threat, then cut back to idle.
-  $('fighter').setAttribute('transform',`translate(${240+dx*7} ${240+dy*7}) scale(${dir==='left'?-1:1} 1) rotate(${dir==='down'?13:dir==='up'?-12:-8})`);
+  node('fighter').setAttribute('transform',`translate(${240+dx*7} ${240+dy*7}) scale(${dir==='left'?-1:1} 1) rotate(${dir==='down'?13:dir==='up'?-12:-8})`);
   const arms={up:'M2 -5L-2 -17L9 -29L16 -24L10 -11L12 0Z',right:'M3 -7L19 -13L28 -4L21 3L8 0Z',down:'M5 -5L19 5L18 23L10 26L8 10L0 0Z',left:'M3 -7L19 -13L28 -4L21 3L8 0Z'};
-  $('guard-arm').setAttribute('d',arms[dir]);
-  $('legs').setAttribute('d','M-7 8L-19 22L-10 25L3 15L13 25L23 25L10 7Z');
-  $('scarf').setAttribute('d','M-7 -9L-32 -15L-25 -4L0 -4Z');
-  $('guard-pose').setAttribute('transform',`rotate(${ROTATION[dir]} 240 240)`);
-  $('guard-pose').setAttribute('visibility','visible');
+  node('guard-arm').setAttribute('d',arms[dir]);
+  node('legs').setAttribute('d','M-7 8L-19 22L-10 25L3 15L13 25L23 25L10 7Z');
+  node('scarf').setAttribute('d','M-7 -9L-32 -15L-25 -4L0 -4Z');
+  node('guard-pose').setAttribute('transform',`rotate(${ROTATION[dir]} 240 240)`);
+  node('guard-pose').setAttribute('visibility','visible');
   const trail=svg('g',{transform:`rotate(${ROTATION[dir]} 240 240)`,fill:'none'});
   trail.append(svg('path',{d:'M232 204L226 185L237 157 M248 204L254 185L243 157',stroke:perfect?'#e9ffda':'#97ac93','stroke-width':perfect?1.5:1}));
   trail.append(svg('path',{d:'M219 143L225 135H255L261 143',stroke:'#edffe1','stroke-width':perfect?2:1}));
-  addTimedEffect(trail,180,t=>trail.setAttribute('opacity',(1-t)*.8),true);
+  schedule(trail,180,t=>trail.setAttribute('opacity',(1-t)*.8),true);
 }
-function shatterEnemy(enemy,perfect) {
+function shatterEnemy(enemy,perfect,schedule=addTimedEffect) {
   const [dx,dy]=DIRECTIONS[enemy.dir];
   const x=240+dx*enemy.radius,y=240+dy*enemy.radius;
   const color=TYPES[enemy.kind].color;
@@ -546,7 +556,7 @@ function shatterEnemy(enemy,perfect) {
   for(let i=0;i<(perfect?8:5);i++) {
     const shard=svg('path',{d:'M0 0L7 -2L3 2Z',fill:i%2?color:'#dcebd5'});group.append(shard);sparks.push(shard);
   }
-  addTimedEffect(group,reducedMotion.matches?150:430,t=>{
+  schedule(group,reducedMotion.matches?150:430,t=>{
     group.setAttribute('opacity',Math.max(0,1-t));
     if(reducedMotion.matches)return;
     halves.forEach((half,i)=>{const sign=i===0?1:-1;half.setAttribute('transform',`translate(${sign*30*t} ${sign*16*t-12*t}) rotate(${sign*(perfect?310:240)*t}) skewX(${sign*Math.sin(t*Math.PI)*30}) scale(${1-t*.65})`)});
@@ -554,7 +564,7 @@ function shatterEnemy(enemy,perfect) {
     slash.setAttribute('opacity',Math.max(0,1-t*3));
   },true);
 }
-function glitchAt(x,y,spread,kind) {
+function glitchAt(x,y,spread,kind,schedule=addTimedEffect) {
   if(kind==='spawn')playSound('spawn');else if(kind==='reveal')playSound('reveal');
   const group=svg('g',{'data-fx':kind,transform:`translate(${x} ${y})`});
   const bars=[];
@@ -563,7 +573,7 @@ function glitchAt(x,y,spread,kind) {
     group.append(bar);bars.push(bar);
   }
   const duration=kind==='spawn'?220:360;
-  addTimedEffect(group,reducedMotion.matches?120:duration,t=>{
+  schedule(group,reducedMotion.matches?120:duration,t=>{
     group.setAttribute('opacity',(1-t)*(reducedMotion.matches ? .25 : .75));
     if(reducedMotion.matches)return;
     const cut=Math.floor(t*7);
@@ -574,11 +584,14 @@ function damageFeedback(coreHit=false) {
   damagedUntil=fxClock+280; $('vulnerability').dataset.damaged='true';
   if(coreHit) {glitchAt(240,240,39,'damage');shakeCamera(4);}
 }
-function updateEffects() {
-  for(const effect of [...effects]) {
-    const t=Math.min(1,Math.max(0,(fxClock-effect.at)/effect.duration));effect.draw(t);
-    if(t===1){effect.node.remove();effects.splice(effects.indexOf(effect),1);}
+function paintTimedEffects(list,now) {
+  for(const effect of [...list]) {
+    const t=Math.min(1,Math.max(0,(now-effect.at)/effect.duration));effect.draw(t);
+    if(t===1){effect.node.remove();list.splice(list.indexOf(effect),1);}
   }
+}
+function updateEffects() {
+  paintTimedEffects(effects,fxClock);
   if(fxClock>=poseUntil && $('fighter').dataset.pose!=='idle') resetPose();
   if(fxClock>=flashUntil || reducedMotion.matches) $('fighter').dataset.flash='false';
   $('vulnerability').dataset.damaged=String(fxClock<damagedUntil);
