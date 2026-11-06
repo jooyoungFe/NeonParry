@@ -81,14 +81,105 @@ function guideCard(category,id,name,copy,condition){
   title.textContent=locked?'?':name;description.textContent=locked?t('Locked · encounter this threat in a run. ','잠김 · 게임에서 직접 발견하세요. ')+condition:copy;
   text.append(title,description);card.append(art,text);return card;
 }
-function renderGuide(){
+const DUEL_UPGRADE_COPY = {
+  mutation: [
+    ['Extra virus', '추가 바이러스'],
+    ['When you attack, you have a chance to send one extra enemy of a random type.', '공격할 때 확률에 따라 다른 종류의 바이러스를 하나 더 보냅니다.']
+  ],
+  attack_speed: [
+    ['Shot speed', '공격 속도'],
+    ['New shots reach the opponent sooner.', '새로 쏘는 바이러스가 상대에게 더 빨리 도착합니다.']
+  ],
+  recharge: [
+    ['Recharge', '충전 속도'],
+    ['Attack energy refills faster over time.', '공격 에너지가 자동으로 차는 속도가 빨라집니다.']
+  ],
+  repair: [
+    ['Repair', '코어 수리'],
+    ['Lowers your vulnerability immediately. You can pick it again later.', '고르는 즉시 취약률이 내려갑니다. 나중에 다시 골라 회복할 수 있습니다.']
+  ],
+  perfect_energy: [
+    ['Perfect energy', '패링 충전'],
+    ['Increases the usual half bar of energy from a perfect parry.', '정밀 패링으로 받는 기본 에너지(0.5칸)가 늘어납니다.']
+  ],
+  attack_power: [
+    ['Attack damage', '공격 피해'],
+    ['Your shots deal more damage when they hit.', '내 공격이 맞았을 때 상대가 받는 피해가 늘어납니다.']
+  ],
+  guard_energy: [
+    ['Guard charge', '방어 충전'],
+    ['Every successful parry adds energy. +10% grants 0.10 extra energy, on top of any perfect parry bonus.', '패링에 성공할 때마다 에너지를 더 얻습니다. +10%면 0.1칸이 차고, 정밀 패링 보너스와 함께 적용됩니다.']
+  ],
+  perfect_repair: [
+    ['Parry repair', '패링 수리'],
+    ['A perfect parry has a chance to lower your vulnerability by 4 percentage points.', '정밀 패링에 성공하면 확률에 따라 취약률이 4%p 내려갑니다.']
+  ],
+  attack_discount: [
+    ['Attack efficiency', '공격 효율'],
+    ['Shots cost less energy. At +100%, a shot costs half a bar.', '공격에 드는 에너지가 줄어듭니다. +100%면 한 번 쏠 때 반 칸을 씁니다.']
+  ],
+  damage_resistance: [
+    ['Core armor', '코어 장갑'],
+    ['Reduces damage from opposing shots. At +100%, incoming damage is about half.', '상대 공격에 맞았을 때 받는 피해가 줄어듭니다. +100%면 피해가 절반 정도로 줄어듭니다.']
+  ],
+  miss_resistance: [
+    ['Empty guard damage', '헛방어 피해'],
+    ['Reduces the duel’s usual 4-point penalty for parrying an empty lane. At −100%, the penalty is zero.', '헛방어로 오르는 취약률(기본 4%p)이 줄어듭니다. −100%면 헛방어 피해가 0이 됩니다.']
+  ]
+};
+
+function duelUpgradeText({ kind, value }) {
+  const name = t(...(DUEL_UPGRADE_COPY[kind]?.[0] ?? ['Upgrade', '업그레이드']));
+  const sign = kind === 'repair' || kind === 'miss_resistance' ? '−' : '+';
+  const unit = ['repair', 'mutation', 'perfect_repair'].includes(kind) ? '%p' : '%';
+  return [name, sign + value + unit];
+}
+
+function renderDuelGuide(panel) {
+  const { RULES, UPGRADE_CATALOG } = window.NeonDuelEngine;
+  const title = document.createElement('h3');
+  const timing = document.createElement('p');
+  const limits = document.createElement('p');
+  const list = document.createElement('dl');
+  const first = RULES.firstUpgradeMs / 1000;
+  const next = RULES.upgradeIntervalMs / 1000;
+  const virusCap = UPGRADE_CATALOG.mutation.cap;
+  title.textContent = t('Duel upgrades', '듀얼 능력');
+  timing.textContent = t(
+    `Your first choices appear after ${first} seconds. Pick one with 1–3 or tap a card. New choices appear ${next} seconds after each pick. Each player gets their own choices, and picks pause during boss rounds.`,
+    `첫 능력은 대전 ${first}초 뒤에 나옵니다. 1~3번 키나 터치로 하나를 고르면 ${next}초 뒤에 다음 선택지가 나옵니다. 선택지는 각자 다르게 뽑히고, 보스전 중에는 선택이 멈춥니다.`
+  );
+  limits.textContent = t(
+    `Extra virus chance stacks up to ${virusCap}%. Other lasting upgrades stack up to ${RULES.upgradeCap}%. Maxed upgrades stop appearing.`,
+    `추가 바이러스 확률은 최대 ${virusCap}%, 나머지 누적 능력은 최대 ${RULES.upgradeCap}%까지 중첩됩니다. 최대치에 닿은 능력은 선택지에서 빠집니다.`
+  );
+  list.className = 'duel-guide-upgrades';
+  for (const [kind, { min, max }] of Object.entries(UPGRADE_CATALOG)) {
+    const row = document.createElement('div');
+    const term = document.createElement('dt');
+    const amount = document.createElement('span');
+    const description = document.createElement('dd');
+    const [name, range] = duelUpgradeText({ kind, value: `${min}–${max}` });
+    term.textContent = name;
+    amount.textContent = range;
+    term.append(amount);
+    description.textContent = t(...DUEL_UPGRADE_COPY[kind][1]);
+    row.append(term, description);
+    list.append(row);
+  }
+  panel.append(title, timing, limits, list);
+}
+
+function renderGuide(tab = guideTab){
+  if(guideTab!==tab)$('help-dialog').scrollTop=0;
+  guideTab=tab;
   const root=$('help-content');root.replaceChildren();
   const tabs=document.createElement('div');tabs.className='guide-tabs';tabs.setAttribute('role','tablist');tabs.setAttribute('aria-label',t('Guide sections','도움말 분류'));
-  const entries=[['controls',t('Controls','기본 조작법')],['enemies',t('Enemies','적 도감')],['bosses',t('Bosses','보스 도감')],['skills',t('Skills','스킬 도감')]];
+  const entries=[['controls',t('Controls','기본 조작법')],['enemies',t('Enemies','적 도감')],['bosses',t('Bosses','보스 도감')],['skills',t('Skills','스킬 도감')],['duel',t('Duel','듀얼')]];
   for(const [id,label] of entries){
     const button=document.createElement('button');button.textContent=label;button.id='guide-tab-'+id;button.dataset.guideTab=id;button.setAttribute('role','tab');button.setAttribute('aria-selected',String(guideTab===id));button.setAttribute('tabindex',guideTab===id?'0':'-1');button.setAttribute('aria-controls','guide-panel');
-    const activate=()=>{guideTab=id;renderGuide();$('guide-tab-'+id).focus();};button.addEventListener('click',activate);
-    button.addEventListener('keydown',event=>{let index=entries.findIndex(e=>e[0]===guideTab);if(event.key==='ArrowRight')index=(index+1)%entries.length;else if(event.key==='ArrowLeft')index=(index+entries.length-1)%entries.length;else if(event.key==='Home')index=0;else if(event.key==='End')index=entries.length-1;else return;event.preventDefault();guideTab=entries[index][0];renderGuide();$('guide-tab-'+guideTab).focus();});tabs.append(button);
+    const activate=()=>{renderGuide(id);$('guide-tab-'+id).focus();};button.addEventListener('click',activate);
+    button.addEventListener('keydown',event=>{let index=entries.findIndex(e=>e[0]===guideTab);if(event.key==='ArrowRight')index=(index+1)%entries.length;else if(event.key==='ArrowLeft')index=(index+entries.length-1)%entries.length;else if(event.key==='Home')index=0;else if(event.key==='End')index=entries.length-1;else return;event.preventDefault();renderGuide(entries[index][0]);$('guide-tab-'+guideTab).focus();});tabs.append(button);
   }
   const panel=document.createElement('div');panel.id='guide-panel';panel.setAttribute('role','tabpanel');panel.setAttribute('aria-labelledby','guide-tab-'+guideTab);panel.setAttribute('tabindex','0');root.append(tabs,panel);
   if(guideTab==='controls'){
@@ -98,6 +189,8 @@ function renderGuide(){
     for(const [id,entry] of Object.entries(ENEMY_GUIDE))panel.append(guideCard('enemy',id,t(...entry.name),t(...entry.copy),t(`Available from ${TYPES[id].unlock} eliminations.`,`${TYPES[id].unlock}회 제거 이후 등장 가능.`)));
   }else if(guideTab==='bosses'){
     for(const [id,boss] of Object.entries(BOSS_TYPES))panel.append(guideCard('boss',id,boss.name,BOSS_GUIDE[id]?t(...BOSS_GUIDE[id]):boss.hint,t('Appears at 100-point milestones or in Boss Rush.','100점 단위 보스전 또는 보스 러쉬에서 등장.')));
+  }else if(guideTab==='duel'){
+    renderDuelGuide(panel);
   }else{
     const info={vaccine:['Heal 29 points. Stop 0.3s, then accelerate over 0.9s. No knockback. Cost: 20 eliminations.','취약률 29%p 회복. 0.3초 정지 후 0.9초 재가속, 넉백 없음. 충전 20회.'],proxy:['Clear one lane, including dormant worms and either side of Phishing; block spawns for 6s. No charge from Proxy kills. Cost: 16. Unavailable in Boss Rush.','한 라인 정리·6초 생성 차단. 대기 웜과 피싱 양쪽 라인 지원. 프록시 처치는 충전하지 않습니다. 충전 16회, 보스 러쉬 선택 불가.'],decoy:['50-point shield. No damage spillover on breaking. Reuse resets to 50, never stacks. Ransomware absorption heals 10 and prevents lane lock. Cost: 24.','50포인트 보호막. 파괴 공격의 초과 피해 차단. 재사용 시 50으로 초기화하며 중첩 없음. 랜섬웨어 흡수 시 10%p 회복·잠금 방지. 충전 24회.']};
     for(const [id,skill] of Object.entries(SKILLS))panel.append(guideCard('skill',id,skill.name,t(...info[id]),''));

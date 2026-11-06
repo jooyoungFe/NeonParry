@@ -64,6 +64,10 @@
   };
   const PERSISTENT_UPGRADES = Object.keys(UPGRADE_CHOICES).filter(kind => kind !== 'repair');
   const upgradeCap = kind => UPGRADE_CHOICES[kind].cap ?? RULES.upgradeCap;
+  const UPGRADE_CATALOG = Object.freeze(Object.fromEntries(
+    Object.entries(UPGRADE_CHOICES).map(([kind, { min, max }]) =>
+      [kind, Object.freeze({ min, max, cap: kind === 'repair' ? null : upgradeCap(kind) })])
+  ));
   const attackCost = player => RULES.attackCost / (1 + (player.upgrades.attack_discount ?? 0) / 100);
   const ENEMY_TRAVEL = { virus: RULES.travelMs, trojan: 1800, worm: 900, ransom: 1250, phishing: 1900, ddos: 2200, echo: 700 };
   const ECHO_DAMAGE = 8;
@@ -645,5 +649,5 @@
     };
   }
 
-  return Object.freeze({ RULES, DIRECTIONS, createMatch, advance, input, forfeit, snapshot, baseEnergyGain });
+  return Object.freeze({ RULES, DIRECTIONS, UPGRADE_CATALOG, createMatch, advance, input, forfeit, snapshot, baseEnergyGain });
 });

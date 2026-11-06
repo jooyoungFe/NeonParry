@@ -1,6 +1,6 @@
 {
   "name": "neon-parry-desktop",
-  "version": "1.5.1",
+  "version": "1.5.2",
   "private": true,
   "description": "Neon Parry frontend, multiplayer backend and Electron shell",
   "main": "desktop/main.cjs",

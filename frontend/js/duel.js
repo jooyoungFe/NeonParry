@@ -30,7 +30,7 @@
   function setBusy(value){busy=value;for(const id of ['duel-random','duel-create','duel-join','duel-ready'])$(id).disabled=value||(localOnly&&id!=='duel-ready');}
   function labels(){
     const values={
-      'duel-title':['Duel','듀얼'],'duel-back':['← Back','← 뒤로'],
+      'duel-title':['Duel','듀얼'],'duel-back':['← Back','← 뒤로'],'duel-help':['Help','도움말'],
       'duel-random':['Find opponent','랜덤 매칭'],'duel-create':['Create room','방 만들기'],'duel-join':['Join','참가'],
       'duel-practice':['Practice vs CPU','CPU 연습'],'duel-level-label':['Opponent','연습 상대'],
       'duel-settings-label':['Connection settings','접속 설정'],'duel-name-label':['Name','이름'],'duel-server-url-label':['Server address','서버 주소'],
@@ -52,6 +52,7 @@
   function lobby(panel='duel-setup'){
     View.unmount();$('main-menu').hidden=true;$('game-view').hidden=true;$('menu-open').hidden=true;$('duel-view').hidden=false;
     for(const id of ['duel-setup','duel-room','duel-matching'])$(id).hidden=id!==panel;
+    $('duel-help').hidden=panel!=='duel-setup';
   }
   function setup(){lobby();feedback();labels();if(!$('duel-server-url').value)$('duel-server-url').value=window.NEON_CONFIG?.apiBaseUrl||'';}
   function open(){pauseGame();setup();$('duel-title').focus({preventScroll:true});}
@@ -311,6 +312,7 @@
     const next=await client.getRoom(membership.code,membership.token).catch(()=>room);if(current!==generation||!membership)return;renderRoom(next);pollRoom(current);
   }
   $('menu-duel').addEventListener('click',open);$('duel-back').addEventListener('click',()=>leave(true));
+  $('duel-help').addEventListener('click',()=>openHelp('duel'));
   $('duel-practice').addEventListener('click',practice);$('duel-create').addEventListener('click',()=>requestRoom(false));$('duel-join').addEventListener('click',()=>requestRoom(true));
   $('duel-random').addEventListener('click',findOpponent);$('duel-cancel').addEventListener('click',()=>leave());$('duel-leave').addEventListener('click',()=>leave());$('duel-ready').addEventListener('click',ready);
   $('duel-code-input').addEventListener('keydown',event=>{if(event.code==='Enter')requestRoom(true);});

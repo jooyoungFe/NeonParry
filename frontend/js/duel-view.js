@@ -7,19 +7,6 @@
   const textIds = ['overlay-symbol', 'overlay-title', 'overlay-copy', 'skill-name', 'skill-key', 'skill-status', 'action', 'run-label', 'score-label', 'score', 'best', 'vulnerability-value', 'message', 'share-status', 'boss-name', 'boss-pips', 'boss-banner-tag', 'boss-banner-title', 'boss-banner-copy'];
   const stateIds = ['overlay', 'skill-choices', 'skill', 'skill-meter', 'skill-fill', 'share', 'next-stage', 'stage-progress', 'boss-hud', 'boss-banner', 'reaction-meter', 'reaction-fill', 'vulnerability', 'vulnerability-fill', 'state-light', 'arena', 'decoy-panel', 'decoy-folder', 'folder-capacity', 'camera', 'world', 'core', 'game-view', 'main-menu', 'menu-open', 'game-shell', 'guard-band', 'guard-outer', 'guard-inner', 'guard-pose'];
   const arrow = { up: '↑', right: '→', down: '↓', left: '←' };
-  const upgradeLabels = {
-    mutation: ['Extra virus', '추가 바이러스'],
-    attack_speed: ['Shot speed', '공격 속도'],
-    recharge: ['Recharge', '충전 속도'],
-    repair: ['Repair', '코어 수리'],
-    perfect_energy: ['Perfect energy', '패링 충전'],
-    attack_power: ['Attack damage', '공격 피해'],
-    guard_energy: ['Guard charge', '방어 충전'],
-    perfect_repair: ['Parry repair', '패링 수리'],
-    attack_discount: ['Attack efficiency', '공격 효율'],
-    damage_resistance: ['Core armor', '코어 장갑'],
-    miss_resistance: ['Empty guard damage', '헛방어 피해']
-  };
   let saved = null, actors = new Map(), lastEventId = 0, guards = 0, roundStart = null, stance = 'guard';
   let config, artTemplate, rivals = new Map(), pendingTarget, prediction, eliminated, localBoss;
   let nextBossSceneId = 0;
@@ -531,12 +518,6 @@
     if (!saved || eliminated || !rivals.has(id)) return;
     pendingTarget = { id, until: clock + 1200 };
   }
-  function upgradeText({ kind, value }) {
-    const label = tr(...(upgradeLabels[kind] || ['Upgrade', '업그레이드']));
-    const sign = kind === 'repair' || kind === 'miss_resistance' ? '−' : '+';
-    const unit = ['repair', 'mutation', 'perfect_repair'].includes(kind) ? '%p' : '%';
-    return [label, sign + value + unit];
-  }
   function renderUpgrade(offer) {
     const panel = $('duel-upgrades');
     const buttons = $('duel-upgrade-choices');
@@ -566,7 +547,7 @@
       key.setAttribute('aria-hidden', 'true');
       key.textContent = index + 1;
       amount.className = 'duel-upgrade-amount';
-      const [choiceName, choiceAmount] = upgradeText(choice);
+      const [choiceName, choiceAmount] = duelUpgradeText(choice);
       name.textContent = choiceName;
       amount.textContent = choiceAmount;
       button.append(key, name, amount);
@@ -675,7 +656,7 @@
         playSound('reveal');
         setMessage(tr('Worm charging', '웜 돌진 대기'), TYPES.worm.color);
       } else if (event.type === 'upgrade' && own) {
-        setMessage(tr('Upgrade · ', '업그레이드 · ') + upgradeText(event).join(' '));
+        setMessage(tr('Upgrade · ', '업그레이드 · ') + duelUpgradeText(event).join(' '));
       } else if (event.type === 'boss_start') {
         if (!eliminated) playSound('boss-warning');
       } else if (event.type === 'boss_phase' && own) {

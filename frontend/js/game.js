@@ -1063,7 +1063,15 @@ function refreshLanguage(){
   if(typeof refreshMenu==='function')refreshMenu();
 }
 $('language').addEventListener('change',event=>{language=event.target.value==='ko'?'ko':'en';try{localStorage.setItem('neon-parry-language',language);}catch{}refreshLanguage();});
-$('help-open').addEventListener('click',()=>{if(typeof renderGuide==='function')renderGuide();pauseGame();pointers.clear();$('help-dialog').showModal();});
+function openHelp(tab) {
+  if (typeof renderGuide === 'function') renderGuide(tab);
+  pauseGame();
+  pointers.clear();
+  const dialog = $('help-dialog');
+  dialog.showModal();
+  dialog.scrollTop = 0;
+}
+$('help-open').addEventListener('click', () => openHelp());
 $('help-close').addEventListener('click',()=>$('help-dialog').close());
 $('help-dialog').addEventListener('click',event=>{if(event.target===$('help-dialog')){const r=event.target.getBoundingClientRect();if(event.clientX<r.left||event.clientX>r.right||event.clientY<r.top||event.clientY>r.bottom)event.target.close();}});
 function updateFullscreenButton(){const active=!!document.fullscreenElement||$('game-shell').classList.contains('expanded');$('fullscreen').textContent=active?t('Exit full screen','전체화면 종료'):t('Full screen','전체화면');$('fullscreen').setAttribute('aria-pressed',String(active));}

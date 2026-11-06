@@ -2175,9 +2175,33 @@ dialog::backdrop {
 .patch-link{border:0;background:none;color:var(--muted);font:11px monospace;min-height:36px;padding:8px;justify-self:center}.patch-link:hover{color:var(--green)}#patch-content{font-size:13px;line-height:1.8;color:var(--muted)}#patch-content h3{color:var(--green);font-weight:500;font-size:14px;margin:20px 0 6px}#patch-content ul{padding-left:20px}#patch-content li{margin:8px 0}.domain-number{font:bold 20px monospace;fill:#ecf4df;text-anchor:middle;paint-order:stroke;stroke:#17221b;stroke-width:3px}.domain-queue{font:11px monospace;fill:#c6d4bd;text-anchor:middle;paint-order:stroke;stroke:#171a1b;stroke-width:3px}.boss-main-cross{opacity:.4}[data-next="true"] .boss-main{stroke:#b7eaaa;stroke-width:3;fill:#344a31}[data-next="true"] .domain-number{fill:#b7eaaa}[data-next="true"] .boss-main-cross{opacity:1}
 
 /* Guide and progression reuse the existing flat console palette. */
-.guide-tabs{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:4px;margin:8px 0 18px}.guide-tabs button{border:0;background:#202722;color:var(--muted);padding:10px 5px;min-height:44px;font-family:inherit;font-size:12px}.guide-tabs [aria-selected="true"]{color:var(--green);background:#2a382b}.guide-card{display:grid;grid-template-columns:72px minmax(0,1fr);gap:16px;padding:16px 0;border-bottom:1px dashed var(--line)}.guide-art{width:72px;height:72px;display:grid;place-items:center;background:#252e28}.guide-art svg{width:60px;height:60px}.guide-card h3{margin:0 0 6px!important}.guide-card p{margin:0!important}.guide-card[data-locked="true"] .guide-art{background:#303a32}#achievement-list{max-height:55svh;overflow:auto;padding-right:8px}.achievement-card{padding:12px 0;border-bottom:1px dashed var(--line)}.achievement-card h3{font-size:14px;font-weight:400;margin:0 0 7px;color:var(--muted)}.achievement-card p{font-size:12px;line-height:1.7;margin:0;color:var(--muted)}.achievement-card[data-unlocked="true"] h3{color:var(--green)}.achievement-toast{position:fixed;bottom:max(16px,env(safe-area-inset-bottom));left:50%;transform:translateX(-50%);background:#253326;color:var(--green);padding:12px 18px;max-width:90vw;font-size:12px;z-index:25;pointer-events:none}.menu-view{min-width:0;grid-template-columns:minmax(0,1fr)}.menu-board{min-width:0;max-width:100%}.mode-list .menu-button{min-height:48px}.home-list .menu-button{min-height:46px}
+.guide-tabs{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:4px;margin:8px 0 18px}.guide-tabs button{border:0;background:#202722;color:var(--muted);padding:10px 5px;min-height:44px;font-family:inherit;font-size:12px}.guide-tabs [aria-selected="true"]{color:var(--green);background:#2a382b}.guide-card{display:grid;grid-template-columns:72px minmax(0,1fr);gap:16px;padding:16px 0;border-bottom:1px dashed var(--line)}.guide-art{width:72px;height:72px;display:grid;place-items:center;background:#252e28}.guide-art svg{width:60px;height:60px}.guide-card h3{margin:0 0 6px!important}.guide-card p{margin:0!important}.guide-card[data-locked="true"] .guide-art{background:#303a32}#achievement-list{max-height:55svh;overflow:auto;padding-right:8px}.achievement-card{padding:12px 0;border-bottom:1px dashed var(--line)}.achievement-card h3{font-size:14px;font-weight:400;margin:0 0 7px;color:var(--muted)}.achievement-card p{font-size:12px;line-height:1.7;margin:0;color:var(--muted)}.achievement-card[data-unlocked="true"] h3{color:var(--green)}.achievement-toast{position:fixed;bottom:max(16px,env(safe-area-inset-bottom));left:50%;transform:translateX(-50%);background:#253326;color:var(--green);padding:12px 18px;max-width:90vw;font-size:12px;z-index:25;pointer-events:none}.menu-view{min-width:0;grid-template-columns:minmax(0,1fr)}.menu-board{min-width:0;max-width:100%}.mode-list .menu-button{min-height:48px}.home-list .menu-button{min-height:46px}
 @media(max-width:600px){.guide-card{grid-template-columns:56px minmax(0,1fr);gap:12px}.guide-art{width:56px;height:56px}.guide-art svg{width:48px;height:48px}.guide-tabs button{font-size:11px}.menu-view{align-items:center}}
 
 .menu-board[data-mode="rush"] .loadout-options,[data-run-mode="rush"] .skill-choices{grid-template-columns:repeat(2,minmax(0,1fr))}
 
 .guide-tabs{position:sticky;top:52px;z-index:1;background:#171c19;padding:4px 0}
+
+.duel-guide-upgrades {
+  margin:14px 0 0
+}
+
+.duel-guide-upgrades > div {
+  padding:10px 0;
+  border-top:1px dashed var(--line)
+}
+
+.duel-guide-upgrades dt {
+  display:flex;
+  justify-content:space-between;
+  gap:12px;
+  color:var(--green)
+}
+
+.duel-guide-upgrades dt span {
+  white-space:nowrap
+}
+
+.duel-guide-upgrades dd {
+  margin:3px 0 0
+}
