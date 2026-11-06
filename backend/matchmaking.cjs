@@ -1,6 +1,6 @@
 'use strict';
 const{randomBytes,randomInt,createHash,timingSafeEqual}=require('node:crypto');
-const{ApiError}=require('./rooms.cjs');
+const{ApiError,parseMode}=require('./rooms.cjs');
 const digest=token=>createHash('sha256').update(token).digest();
 
 // Queue credentials and room memberships exist only in this process. Queue
@@ -26,8 +26,8 @@ class MatchmakingStore{
     const peer=[...this.tickets.values()].find(other=>other.status==='matched'&&other.member?.matchId===ticket.member?.matchId);
     const room=this.liveMember(ticket);this.abandon(ticket);
     if(!peer||peer.handedOff)return;
-    // No request can interleave with these synchronous mutations. The first
-    // leave resets the room; removing its unclaimed peer closes that empty room.
+    // No request can interleave with these synchronous mutations. Removing
+    // the unclaimed peer closes the unused room.
     if(room&&this.rooms.rooms.get(room.code)===room){
       try{this.rooms.leave(room.code,peer.member.playerToken);}catch(error){if(!(error instanceof ApiError)||![401,404].includes(error.status))throw error;}
     }
@@ -46,7 +46,7 @@ class MatchmakingStore{
     return ticket;
   }
   publicState(ticket){
-    const state={ticketId:ticket.id,status:ticket.status,serverTime:this.now(),expiresAt:ticket.expiresAt};
+    const state={ticketId:ticket.id,status:ticket.status,mode:ticket.mode,serverTime:this.now(),expiresAt:ticket.expiresAt};
     if(ticket.status==='matched'){
       const room=this.liveMember(ticket);
       if(!room){state.status='cancelled';state.reason='opponent_left';return state;}
@@ -58,7 +58,7 @@ class MatchmakingStore{
   pair(first,second){
     let host,guest;
     try{
-      host=this.rooms.create(first.name);guest=this.rooms.join(host.room.code,second.name);
+      host=this.rooms.create(first.name,{mode:first.mode,random:true});guest=this.rooms.join(host.room.code,second.name);
       this.rooms.ready(host.room.code,host.playerToken,true);const room=this.rooms.ready(host.room.code,guest.playerToken,true);
       const expiresAt=this.now()+this.handoffTtlMs;
       for(const[ticket,member]of[[first,host],[second,guest]]){
@@ -70,11 +70,12 @@ class MatchmakingStore{
       throw error;
     }
   }
-  find(name){
+  find(name,mode='classic'){
+    mode=parseMode(mode);
     this.prune();if(this.tickets.size>=this.maxTickets)throw new ApiError(503,'MATCHMAKING_CAPACITY','Matchmaking is temporarily full.');
     const now=this.now(),token=randomBytes(32).toString('base64url');
-    const ticket={id:randomBytes(12).toString('hex'),tokenHash:digest(token),name,status:'waiting',member:null,handedOff:false,lastSeenAt:now,expiresAt:now+this.waitingTtlMs};
-    const candidates=[...this.waiting].map(id=>this.tickets.get(id)).filter(Boolean);
+    const ticket={id:randomBytes(12).toString('hex'),tokenHash:digest(token),name,mode,status:'waiting',member:null,handedOff:false,lastSeenAt:now,expiresAt:now+this.waitingTtlMs};
+    const candidates=[...this.waiting].map(id=>this.tickets.get(id)).filter(other=>other?.mode===mode);
     this.tickets.set(ticket.id,ticket);this.waiting.add(ticket.id);
     try{if(candidates.length)this.pair(candidates[this.choose(candidates.length)],ticket);}
     catch(error){this.tickets.delete(ticket.id);this.waiting.delete(ticket.id);throw error;}

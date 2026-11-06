@@ -253,3 +253,321 @@ test('forfeit handles countdown and running matches through the shared finish pa
     assert.equal(E.forfeit(m, 'a', 0).reason, 'finished');
   }
 });
+
+const clash = (players = ['a', 'b'], options = {}) => E.createMatch({ mode: 'clash', players, ...options });
+const waveImpact = index => E.RULES.waveDelayMs + E.RULES.travelMs + index * E.RULES.waveIntervalMs;
+const waveFor = (m, id, kind) => m.attacks.find(shot => shot.from === null && shot.to === id && shot.kind === kind);
+const fasterTravel = (base, boost) => Math.round(base * 100 / (100 + boost));
+
+test('clash sends identical varied waves to all eight players and ends an idle round in a draw', () => {
+  const roster = Array.from({ length: 8 }, (_, index) => `p${index}`);
+  assert.throws(() => E.createMatch({ players: roster }), /two distinct/);
+  assert.throws(() => clash([...roster, 'p8']), /2–8 distinct/);
+  assert.throws(() => clash(['a', 'b', 'a']), /2–8 distinct/);
+  assert.throws(() => clash(['a', , 'c']), /2–8 distinct/);
+  const startAt = 3_000;
+  const m = clash(roster, { startAt, seed: 'example' });
+  assert.equal(E.snapshot(m, startAt - 1).attacks.length, 0);
+  assert.equal(E.snapshot(m, startAt + E.RULES.waveDelayMs - 1).attacks.length, 0);
+  const first = E.snapshot(m, startAt + E.RULES.waveDelayMs + 100);
+  assert.equal(first.mode, 'clash');
+  assert.equal(first.attacks.length, 8);
+  assert.equal(first.attacks.every(shot => shot.from === null && shot.kind === 'virus'), true);
+
+  const lastImpact = startAt + waveImpact(5);
+  const beforeFinish = E.snapshot(m, lastImpact);
+  const kinds = ['virus', 'trojan', 'worm', 'ransom', 'phishing', 'ddos'];
+  const schedule = (state, id) => state.events
+    .filter(event => event.type === 'attack' && event.source === 'wave' && event.to === id && event.impactAt <= lastImpact)
+    .map(({ at, impactAt, dir, kind }) => ({ at, impactAt, dir, kind }));
+  const shared = schedule(beforeFinish, roster[0]);
+  assert.deepEqual(shared.map(shot => shot.kind), kinds);
+  const baseTravel = [2200, 1800, 900, 1250, 1900, 2200];
+  assert.deepEqual(shared.map(shot => shot.impactAt - shot.at), shared.map((shot, index) =>
+    fasterTravel(baseTravel[index], Math.floor((shot.at - startAt) / E.RULES.speedStepMs))));
+  assert.ok(shared.slice(1).every((shot, index) => shot.dir !== shared[index].dir));
+  for (const id of roster) assert.deepEqual(schedule(beforeFinish, id), shared);
+  const replay = E.snapshot(clash(roster, { startAt, seed: 'example' }), lastImpact);
+  const another = E.snapshot(clash(roster, { startAt, seed: 'different' }), lastImpact);
+  assert.deepEqual(schedule(replay, roster[0]), shared);
+  assert.notDeepEqual(schedule(another, roster[0]), shared);
+  assert.equal(beforeFinish.players.every(p => p.vulnerability === 87 && !p.eliminated), true);
+
+  const after = E.snapshot(m, 100_000);
+  assert.equal(after.status, 'finished');
+  assert.equal(after.finishReason, 'draw');
+  assert.equal(after.winnerId, null);
+  assert.equal(after.finishedAt, lastImpact + E.RULES.guardWindowMs + 1);
+  assert.equal(after.players.every(p => p.eliminated), true);
+  assert.equal(after.events.filter(event => event.type === 'eliminate').length, 8);
+});
+
+test('clash targets persist across attack overrides and retarget when a rival leaves', () => {
+  const m = clash(['a', 'b', 'c']);
+  assert.equal(E.snapshot(m, 0).players[0].targetId, 'b');
+  assert.equal(E.input(m, 'a', { type: 'target', targetId: 'a' }, 0).reason, 'invalid_target');
+  assert.deepEqual(E.input(m, 'a', { type: 'target', targetId: 'c' }, 0), { ok: true, targetId: 'c' });
+  assert.equal(lastEvent(m, 'target').targetId, 'c');
+  const override = E.input(m, 'a', { type: 'attack', dir: 'down', targetId: 'b' }, 0);
+  const direct = attack(m, 'a', 'right', E.RULES.attackCooldownMs);
+  assert.equal(m.attacks.find(shot => shot.attackId === override.attackId).to, 'b');
+  assert.equal(m.attacks.find(shot => shot.attackId === direct.attackId).to, 'c');
+  assert.equal(player(m, 'a').targetId, 'c');
+  assert.equal(attack(m, 'c', 'left', 400).ok, true);
+  assert.deepEqual(E.forfeit(m, 'c', 410), { ok: true, winnerId: null });
+  assert.equal(m.status, 'running');
+  assert.equal(lastEvent(m, 'eliminate').playerId, 'c');
+  assert.equal(player(m, 'a').targetId, 'b');
+  assert.equal(player(m, 'c').eliminated, true);
+  assert.equal(m.attacks.some(shot => shot.from === 'c' || shot.to === 'c'), false);
+  assert.equal(attack(m, 'c', 'left', 420).reason, 'eliminated');
+
+  assert.equal(guard(m, 'b', 'down', override.impactAt).guarded, true);
+  E.advance(m, waveImpact(0));
+  player(m, 'b').vulnerability = 99;
+  const ownWave = waveFor(m, 'a', 'virus');
+  assert.equal(guard(m, 'a', ownWave.dir, ownWave.impactAt).guarded, true);
+  const result = E.snapshot(m, 10_000);
+  assert.equal(result.status, 'finished');
+  assert.equal(result.winnerId, 'a');
+  assert.equal(result.players[0].targetId, null);
+  assert.equal(result.players[1].eliminated, true);
+  assert.equal(lastEvent(m, 'eliminate').reason, 'vulnerability');
+});
+
+test('clash player attacks reserve arrival slots around neutral waves even before those waves launch', () => {
+  const m = clash(['a', 'b', 'c', 'd']);
+  const shots = ['a', 'c', 'd'].map(id => E.input(m, id, { type: 'attack', dir: 'up', targetId: 'b' }, E.RULES.waveDelayMs));
+  assert.equal(m.attacks.some(shot => shot.source === 'wave'), false);
+  assert.deepEqual(shots.map(shot => shot.impactAt), [6220, 6740, 7260]);
+  assert.ok(m.attacks.every(shot => shot.launchedAt > E.RULES.waveDelayMs));
+  assert.ok(m.attacks.every(shot => shot.impactAt - shot.launchedAt === fasterTravel(2200, 2)));
+  assert.ok(m.events.every(event => event.at === E.RULES.waveDelayMs));
+  const withWave = E.snapshot(m, E.RULES.waveDelayMs + 100);
+  const incoming = withWave.attacks.filter(shot => shot.to === 'b').map(shot => shot.impactAt).sort((a, b) => a - b);
+  assert.deepEqual(incoming, [5700, 6220, 6740, 7260]);
+  assert.ok(incoming.slice(1).every((at, index) => at - incoming[index] >= E.RULES.arrivalGapMs));
+});
+
+test('clash combo sends a free counter to the selected rival, and Trojan adds an opposite-lane echo', () => {
+  const m = clash(['a', 'b', 'c']);
+  E.input(m, 'a', { type: 'target', targetId: 'c' }, 0);
+  E.advance(m, waveImpact(0));
+  const virus = waveFor(m, 'a', 'virus');
+  assert.equal(guard(m, 'a', virus.dir, virus.impactAt).perfect, true);
+  assert.equal(player(m, 'a').combo, 2);
+  E.advance(m, waveImpact(1));
+  const trojan = waveFor(m, 'a', 'trojan');
+  assert.equal(guard(m, 'a', trojan.dir, trojan.impactAt).perfect, true);
+  assert.equal(lastEvent(m, 'guard').kind, 'trojan');
+  assert.equal(player(m, 'a').combo, 1);
+
+  const echo = waveFor(m, 'a', 'echo');
+  assert.equal(echo.dir, E.DIRECTIONS[(E.DIRECTIONS.indexOf(trojan.dir) + 2) % 4]);
+  assert.equal(echo.impactAt - echo.launchedAt, fasterTravel(700, 5));
+  const counter = m.attacks.find(shot => shot.source === 'counter');
+  assert.equal(counter.from, 'a');
+  assert.equal(counter.to, 'c');
+  assert.equal(counter.kind, 'trojan');
+  assert.equal(counter.impactAt - counter.launchedAt, fasterTravel(1800, 5));
+  assert.equal(lastEvent(m, 'attack').source, 'counter');
+  assert.equal(player(m, 'a').energy, E.RULES.energyMax);
+  assert.equal(attack(m, 'a', 'down', trojan.impactAt).ok, true);
+
+  assert.equal(guard(m, 'a', trojan.dir, echo.impactAt).guarded, false);
+  assert.equal(player(m, 'a').combo, 0);
+});
+
+test('clash combo can cancel incoming garbage while leaving neutral waves intact, and damage clears combo', () => {
+  const m = clash();
+  E.advance(m, waveImpact(0));
+  const virus = waveFor(m, 'a', 'virus');
+  guard(m, 'a', virus.dir, virus.impactAt);
+  const enemyShot = attack(m, 'b', 'right', waveImpact(1) - 1600);
+  E.advance(m, waveImpact(1));
+  const trojan = waveFor(m, 'a', 'trojan');
+  guard(m, 'a', trojan.dir, trojan.impactAt);
+  const canceled = lastEvent(m, 'cancel');
+  assert.equal(canceled.playerId, 'a');
+  assert.equal(canceled.attackId, enemyShot.attackId);
+  assert.equal(canceled.dir, 'right');
+  assert.equal(m.attacks.some(shot => shot.attackId === enemyShot.attackId || shot.source === 'counter'), false);
+  const echo = waveFor(m, 'a', 'echo');
+  assert.ok(echo);
+  assert.equal(player(m, 'a').combo, 1);
+  E.advance(m, echo.impactAt + E.RULES.guardWindowMs + 1);
+  assert.equal(player(m, 'a').vulnerability, 8);
+  assert.equal(player(m, 'a').combo, 0);
+  E.advance(m, waveImpact(2));
+  assert.ok(waveFor(m, 'a', 'worm'));
+});
+
+test('clash Phishing shows an opposite decoy and is guardable in the true direction only after reveal', () => {
+  const m = clash();
+  E.advance(m, waveImpact(4) - E.RULES.guardWindowMs - 1);
+  const phishing = waveFor(m, 'a', 'phishing');
+  assert.equal(phishing.decoyDir, E.DIRECTIONS[(E.DIRECTIONS.indexOf(phishing.dir) + 2) % 4]);
+  assert.equal(phishing.revealAt, phishing.impactAt - E.RULES.guardWindowMs);
+  assert.equal(guard(m, 'a', phishing.dir, phishing.revealAt - 1).guarded, false);
+  assert.equal(guard(m, 'b', phishing.decoyDir, phishing.revealAt).guarded, false);
+  assert.equal(guard(m, 'b', phishing.dir, phishing.revealAt).guarded, true);
+  assert.equal(lastEvent(m, 'guard').kind, 'phishing');
+});
+
+test('trusted guard delay and optional settlement grace are capped, and command-supplied timing is ignored', () => {
+  const guardAt = E.RULES.travelMs + E.RULES.guardWindowMs + 120;
+  const online = () => E.createMatch({ players: ['a', 'b'], guardGraceMs: 1000 });
+  const m = online();
+  attack(m, 'a', 'up', 0);
+  assert.equal(E.input(m, 'b', { type: 'guard', dir: 'up' }, guardAt, { guardDelayMs: 1000 }).guarded, true);
+  assert.equal(lastEvent(m, 'guard').at, guardAt);
+  assert.equal(guard(m, 'b', 'up', guardAt + E.RULES.guardCooldownMs - 1).reason, 'cooldown');
+
+  const untrusted = online();
+  attack(untrusted, 'a', 'up', 0);
+  assert.equal(E.input(untrusted, 'b', { type: 'guard', dir: 'up', guardDelayMs: 120 }, guardAt).guarded, false);
+  assert.equal(player(untrusted, 'b').vulnerability, 0);
+  E.advance(untrusted, guardAt + 1);
+  assert.equal(player(untrusted, 'b').vulnerability, 15);
+
+  const late = online();
+  attack(late, 'a', 'up', 0);
+  assert.equal(E.input(late, 'b', { type: 'guard', dir: 'up' }, guardAt + 1, { guardDelayMs: 1000 }).guarded, false);
+  assert.equal(player(late, 'b').vulnerability, 15);
+
+  const offline = match();
+  attack(offline, 'a', 'up', 0);
+  assert.equal(E.input(offline, 'b', { type: 'guard', dir: 'up' }, guardAt, { guardDelayMs: 120 }).guarded, false);
+  assert.equal(player(offline, 'b').vulnerability, 15);
+});
+
+test('trusted latency can restore perfect timing without retroactively guarding a new launch', () => {
+  const m = match();
+  attack(m, 'a', 'up', 0);
+  const receipt = E.RULES.travelMs + 160;
+  assert.equal(E.input(m, 'b', { type: 'guard', dir: 'up' }, receipt, { guardDelayMs: 60 }).perfect, true);
+  assert.equal(lastEvent(m, 'guard').at, receipt);
+
+  const recent = match(1000);
+  attack(recent, 'a', 'up', 2000);
+  // Model a short-travel shot to exercise the launch check independently of
+  // the normal travel speeds, which all exceed the maximum compensation.
+  recent.attacks[0].impactAt = 2060;
+  assert.equal(E.input(recent, 'b', { type: 'guard', dir: 'up' }, 2050, { guardDelayMs: 120 }).guarded, false);
+});
+
+const firstUpgrade = E.RULES.firstUpgradeMs;
+const choose = (m, id, choiceId, at = firstUpgrade, offerId = 'offer-1') =>
+  E.input(m, id, { type: 'upgrade', offerId, choiceId }, at);
+
+test('clash offers three shared seeded choices, accepts one, and keeps unclaimed offers across waves', () => {
+  const roster = ['a', 'b', 'c'];
+  const m = clash(roster, { seed: 0 });
+  assert.equal(E.snapshot(m, firstUpgrade - 1).players[0].offer, null);
+  assert.equal(choose(m, 'a', 'recharge', firstUpgrade - 1).reason, 'invalid_offer');
+  const before = E.snapshot(m, firstUpgrade);
+  const offer = before.players[0].offer;
+  assert.equal(offer.choices.length, 3);
+  assert.equal(new Set(offer.choices.map(choice => choice.kind)).size, 3);
+  assert.deepEqual(before.players[1].offer, offer);
+  assert.deepEqual(E.snapshot(clash(roster, { seed: 0 }), firstUpgrade).players[0].offer, offer);
+  assert.notDeepEqual(E.snapshot(clash(roster, { seed: 1 }), firstUpgrade).players[0].offer, offer);
+  assert.equal(lastEvent(m, 'upgrade_offer').at, firstUpgrade);
+  assert.equal(choose(m, 'a', 'recharge', firstUpgrade, 'wrong').reason, 'invalid_offer');
+  assert.equal(choose(m, 'a', 'unknown').reason, 'invalid_choice');
+
+  const recharge = offer.choices.find(choice => choice.kind === 'recharge');
+  const result = choose(m, 'a', 'recharge');
+  assert.deepEqual(result, { ok: true, kind: 'recharge', value: recharge.value });
+  assert.equal(lastEvent(m, 'upgrade').playerId, 'a');
+  assert.equal(choose(m, 'a', 'attack_speed').reason, 'invalid_offer');
+  const after = E.snapshot(m, firstUpgrade);
+  assert.equal(after.players[0].offer, null);
+  assert.equal(after.players[0].upgrades.recharge, result.value);
+  after.players[0].upgrades.recharge = 999;
+  before.players[0].offer.choices[0].value = 999;
+  assert.equal(player(m, 'a').upgrades.recharge, result.value);
+  assert.notEqual(before.players[1].offer.choices[0].value, 999);
+  assert.notEqual(player(m, 'b').offer.choices[0].value, 999);
+
+  const shot = attack(m, 'a', 'up', firstUpgrade);
+  assert.equal(shot.ok, true);
+  E.advance(m, firstUpgrade + E.RULES.energyRechargeMs / 2);
+  close(player(m, 'a').energy, 2 + 0.5 * (1 + result.value / 100));
+  assert.equal(guard(m, 'b', 'up', shot.impactAt).guarded, true);
+  const second = E.snapshot(m, firstUpgrade + E.RULES.upgradeIntervalMs);
+  assert.equal(second.players[0].offer.id, 'offer-2');
+  assert.equal(second.players[1].offer.id, 'offer-1');
+  assert.equal(E.forfeit(m, 'c', second.now).ok, true);
+  assert.equal(E.snapshot(m, second.now).players[2].offer, null);
+});
+
+test('a seeded mutation roll can add a non-Virus behind the original attack for one energy', () => {
+  for (const [seed, expected] of [[0, true], [3, false]]) {
+    const m = clash(['a', 'b'], { seed });
+    assert.ok(choose(m, 'a', 'mutation').value > 0);
+    const result = attack(m, 'a', 'down', firstUpgrade);
+    const primary = m.attacks.find(shot => shot.attackId === result.attackId);
+    assert.equal(primary.kind, 'virus');
+    assert.equal(primary.source, 'manual');
+    assert.equal(player(m, 'a').energy, 2);
+    const extra = m.attacks.find(shot => shot.attackId === result.mutationAttackId);
+    assert.equal(Boolean(extra), expected);
+    if (expected) {
+      assert.notEqual(extra.kind, 'virus');
+      assert.equal(extra.source, 'mutation');
+      assert.equal(extra.to, primary.to);
+      assert.ok(extra.impactAt - primary.impactAt >= E.RULES.arrivalGapMs);
+      const travel = { trojan: 1800, worm: 900, ransom: 1250, phishing: 1900, ddos: 2200 }[extra.kind];
+      assert.ok(extra.launchedAt > firstUpgrade);
+      assert.equal(extra.impactAt - extra.launchedAt, fasterTravel(travel, 5));
+      assert.equal(lastEvent(m, 'attack').at, firstUpgrade);
+    }
+  }
+});
+
+test('clash speed only applies to newly launched shots, stacks with attack speed, and caps over time', () => {
+  const m = clash(['a', 'b', 'c', 'd'], { seed: 0 });
+  const old = E.input(m, 'a', { type: 'attack', dir: 'left', targetId: 'd' }, firstUpgrade - 400);
+  const { value } = choose(m, 'a', 'attack_speed');
+  assert.ok(value > 0);
+  const fast = attack(m, 'a', 'up', firstUpgrade);
+  const regular = attack(m, 'b', 'right', firstUpgrade);
+  assert.equal(m.attacks.find(shot => shot.attackId === old.attackId).impactAt, old.impactAt);
+  const speed = E.snapshot(m, firstUpgrade).speedPercent;
+  assert.equal(speed, 5);
+  assert.equal(regular.impactAt - firstUpgrade, fasterTravel(E.RULES.travelMs, speed));
+  assert.equal(fast.impactAt, Math.max(firstUpgrade + fasterTravel(E.RULES.travelMs, speed + value), waveImpact(1) + E.RULES.arrivalGapMs));
+  assert.ok(fast.impactAt < regular.impactAt);
+  const flight = m.attacks.find(shot => shot.attackId === fast.attackId);
+  assert.equal(flight.impactAt - flight.launchedAt, fasterTravel(E.RULES.travelMs, speed + value));
+
+  const rally = clash();
+  for (let at = 0; at <= 50_000; at += 100) {
+    E.advance(rally, at);
+    for (const shot of [...rally.attacks]) {
+      if (shot.impactAt <= at) guard(rally, shot.to, shot.dir, at);
+    }
+  }
+  assert.equal(rally.status, 'running');
+  assert.equal(E.snapshot(rally, 50_000).speedPercent, E.RULES.maxSpeedPercent);
+});
+
+test('clash repair reports actual vulnerability restored and perfect energy applies on the next perfect', () => {
+  const repair = clash(['a', 'b'], { seed: 1 });
+  const initial = E.snapshot(repair, firstUpgrade).players[0];
+  assert.equal(initial.vulnerability, 12);
+  assert.ok(initial.offer.choices.find(choice => choice.kind === 'repair').value > initial.vulnerability);
+  assert.equal(choose(repair, 'a', 'repair').value, initial.vulnerability);
+  assert.equal(player(repair, 'a').vulnerability, 0);
+  assert.equal(lastEvent(repair, 'upgrade').value, initial.vulnerability);
+
+  const perfect = clash(['a', 'b'], { seed: 4 });
+  const { value } = choose(perfect, 'a', 'perfect_energy');
+  assert.ok(value > 0);
+  E.advance(perfect, waveImpact(1));
+  const trojan = waveFor(perfect, 'a', 'trojan');
+  assert.equal(attack(perfect, 'a', 'up', trojan.impactAt).ok, true);
+  assert.equal(guard(perfect, 'a', trojan.dir, trojan.impactAt).perfect, true);
+  close(player(perfect, 'a').energy, 2 + E.RULES.perfectEnergy * (1 + value / 100));
+});
