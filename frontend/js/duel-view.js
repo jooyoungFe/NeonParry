@@ -4,18 +4,22 @@
 // scene uses the same match state and drawing helpers.
 (() => {
   const layerIds = ['enemies', 'effects', 'foreground-fx', 'phishing-links', 'boss-entities', 'lane-states'];
-  const textIds = ['overlay-symbol', 'overlay-title', 'overlay-copy', 'skill-name', 'skill-key', 'skill-status', 'action', 'run-label', 'score-label', 'score', 'best', 'vulnerability-value', 'message', 'share-status'];
-  const stateIds = ['overlay', 'skill-choices', 'skill', 'skill-meter', 'skill-fill', 'share', 'next-stage', 'stage-progress', 'boss-hud', 'boss-banner', 'reaction-meter', 'vulnerability', 'vulnerability-fill', 'state-light', 'arena', 'decoy-panel', 'decoy-folder', 'folder-capacity', 'camera', 'world', 'core', 'game-view', 'main-menu', 'menu-open', 'game-shell', 'guard-band', 'guard-outer', 'guard-inner', 'guard-pose'];
+  const textIds = ['overlay-symbol', 'overlay-title', 'overlay-copy', 'skill-name', 'skill-key', 'skill-status', 'action', 'run-label', 'score-label', 'score', 'best', 'vulnerability-value', 'message', 'share-status', 'boss-name', 'boss-pips', 'boss-banner-tag', 'boss-banner-title', 'boss-banner-copy'];
+  const stateIds = ['overlay', 'skill-choices', 'skill', 'skill-meter', 'skill-fill', 'share', 'next-stage', 'stage-progress', 'boss-hud', 'boss-banner', 'reaction-meter', 'reaction-fill', 'vulnerability', 'vulnerability-fill', 'state-light', 'arena', 'decoy-panel', 'decoy-folder', 'folder-capacity', 'camera', 'world', 'core', 'game-view', 'main-menu', 'menu-open', 'game-shell', 'guard-band', 'guard-outer', 'guard-inner', 'guard-pose'];
   const arrow = { up: '↑', right: '→', down: '↓', left: '←' };
   const upgradeLabels = {
     mutation: ['Extra virus', '추가 바이러스'],
     attack_speed: ['Shot speed', '공격 속도'],
     recharge: ['Recharge', '충전 속도'],
     repair: ['Repair', '코어 수리'],
-    perfect_energy: ['Perfect energy', '패링 충전']
+    perfect_energy: ['Perfect energy', '패링 충전'],
+    attack_power: ['Attack damage', '공격 피해'],
+    guard_energy: ['Guard charge', '방어 충전'],
+    perfect_repair: ['Parry repair', '패링 수리']
   };
   let saved = null, actors = new Map(), lastEventId = 0, guards = 0, roundStart = null, stance = 'guard';
-  let config, artTemplate, rivals = new Map(), pendingTarget, prediction, eliminated;
+  let config, artTemplate, rivals = new Map(), pendingTarget, prediction, eliminated, localBoss;
+  let nextBossSceneId = 0;
   const tr = (en, ko) => t(en, ko);
   const children = node => Array.from(node.childNodes || node.children);
   function attributes(node) {
@@ -47,30 +51,240 @@
   function bestLabel() { return $('best').parentNode.querySelector('small'); }
 
   function attackKind(kind) { return Object.prototype.hasOwnProperty.call(TYPES, kind) ? kind : 'virus'; }
-  function createAttackActor(attack, upgradesEnabled) {
+  function mountAttackActor(attack, upgradesEnabled, node) {
     const kind = attackKind(attack.kind);
     // Legacy snapshots report command time. Upgrade-enabled rooms report when
     // the attack appears so queued shots retain their full travel speed.
     const travel = upgradesEnabled && Number.isFinite(attack.launchedAt) && attack.impactAt > attack.launchedAt
       ? attack.impactAt - attack.launchedAt : TYPES[kind].travel;
     const deceptive = kind === 'phishing' && arrow[attack.decoyDir] && Number.isFinite(attack.revealAt);
-    return createEnemyActor(deceptive ? attack.decoyDir : attack.dir, attack.impactAt - travel, travel, kind, {
-      arrival: attack.impactAt, trueDir: attack.dir, revealAt: deceptive ? attack.revealAt : -Infinity
+    const actor = createEnemyActor(deceptive ? attack.decoyDir : attack.dir, attack.impactAt - travel, travel, kind, {
+      arrival: attack.impactAt, trueDir: attack.dir, revealAt: deceptive ? attack.revealAt : -Infinity, duelVisual: true
     });
+    node('enemies').append(actor.node);
+    if (deceptive) {
+      actor.mirror = actor.node.cloneNode(true);
+      actor.mirror.setAttribute('data-role', 'phishing-body');
+      actor.mirror.setAttribute('opacity', '.5');
+      actor.mirror.firstElementChild.setAttribute('stroke-dasharray', '2 3');
+      actor.link = svg('path', { class: 'phishing-link', visibility: 'hidden' });
+      node('phishing-links').append(actor.link);
+      node('enemies').append(actor.mirror);
+    }
+    return actor;
   }
-  function paintAttack(actor, at) {
-    const decoy = actor.dir;
-    actor.revealed = at >= actor.revealAt;
-    if (actor.revealed) actor.dir = actor.trueDir;
-    paintEnemy(actor, at);
-    actor.dir = decoy;
+  function paintAttack(actor, attack, at, audible = false) {
+    if (actor.kind === 'worm') {
+      const dormant = attack.state === 'dormant';
+      actor.state = dormant ? 'dormant' : 'moving';
+      actor.remaining = attack.remaining ?? 0;
+      actor.startRadius = dormant ? 157 : START_RADIUS;
+      actor.arrival = attack.impactAt ?? Infinity;
+      actor.at = Number.isFinite(attack.launchedAt) ? attack.launchedAt : actor.arrival - actor.travel;
+      if (actor.arrival > actor.at && Number.isFinite(actor.arrival)) actor.travel = actor.arrival - actor.at;
+      const [dx, dy] = DIRECTIONS[actor.dir];
+      actor.hop = Number.isFinite(attack.hopAt) && at >= attack.hopAt && at < actor.at
+        ? { at: attack.hopAt, until: actor.at, x: 240 + dx * 157, y: 240 + dy * 157 } : null;
+    }
+    const { visible, ready } = paintEnemy(actor, at);
+    if (!actor.mirror) return;
+    const revealed = visible && at >= actor.revealAt;
+    if (revealed && !actor.revealed && audible) playSound('reveal');
+    actor.revealed = revealed;
+    const [dx, dy] = DIRECTIONS[actor.trueDir];
+    const x = 240 + dx * actor.radius, y = 240 + dy * actor.radius;
+    actor.mirror.setAttribute('transform', `translate(${x} ${y})`);
+    actor.mirror.setAttribute('visibility', revealed ? 'visible' : 'hidden');
+    actor.mirror.firstElementChild.setAttribute('stroke-width', ready ? 2.5 : 1.25);
+    actor.mirror.firstElementChild.setAttribute('stroke', ready ? '#ffe2c7' : TYPES.phishing.color);
+    actor.mirror.children[1].setAttribute('transform', actor.fill.getAttribute('transform'));
+    actor.link.setAttribute('visibility', revealed ? 'visible' : 'hidden');
+    actor.link.setAttribute('d', `M${actor.x} ${actor.y}L${x} ${y}`);
+    actor.outline.setAttribute('stroke-width', 1.25);
+    actor.outline.setAttribute('stroke', TYPES.phishing.color);
+    if (revealed) actor.outline.setAttribute('stroke-dasharray', '1 4');
   }
   function breakAttack(actor, event, schedule) {
-    const radius = actor ? enemyPosition(actor, event.at).radius : TARGET_RADIUS;
-    shatterEnemy({ dir: event.dir, kind: actor?.kind || attackKind(event.kind), radius }, event.perfect, schedule);
+    const radius = event.radius ?? (actor ? enemyPosition(actor, event.at).radius : TARGET_RADIUS);
+    const kind = event.source === 'boss' ? (event.kind === 'destroy' ? 'ddos' : 'trojan') : actor?.kind || attackKind(event.kind);
+    shatterEnemy({ dir: event.dir, kind, radius }, strongGuard(event), schedule);
   }
+  function strongGuard(event) { return event.source === 'boss' ? event.heavy : event.perfect; }
   function manualAttack(event) { return event.type === 'attack' && (!event.source || event.source === 'manual'); }
   function hasMissPenalty(event) { return Number.isFinite(event.damage) && event.damage > 0; }
+
+  function lanePosition(dir, radius) {
+    const [dx, dy] = DIRECTIONS[dir];
+    return [240 + dx * radius, 240 + dy * radius];
+  }
+  function bossAttackArt(kind, attack) {
+    const color = BOSS_TYPES[kind].color;
+    const r = kind === 'domain' ? 20 : [23, 17, 12][attack.depth];
+    const node = svg('g', { class: 'boss-node', 'data-boss-attack': attack.id });
+    const outline = svg('path', { d: `M${-r} ${-r*.55}L0 ${-r}L${r} ${-r*.55}V${r*.55}L0 ${r}L${-r} ${r*.55}Z`, fill: '#202820', stroke: color });
+    const fill = svg('path', { d: `M${-r+3} 0L0 ${-r+3}L${r-3} 0L0 ${r-3}Z`, fill: color });
+    const label = svg('text', { x: 0, y: -r - 9, class: 'boss-attack-label' });
+    label.textContent = kind === 'domain' ? '//' : ['1', '½', '¼'][attack.depth];
+    node.append(outline, fill, label);
+    return { node, paint(at, window) {
+      const progress = Math.max(0, (at - attack.launchedAt) / (attack.impactAt - attack.launchedAt));
+      const [x, y] = lanePosition(attack.dir, 205 - (205 - TARGET_RADIUS) * progress);
+      node.setAttribute('visibility', at >= attack.launchedAt ? 'visible' : 'hidden');
+      node.setAttribute('transform', `translate(${x} ${y})`);
+      fill.setAttribute('transform', `scale(${Math.sqrt(Math.min(1, progress))})`);
+      outline.setAttribute('stroke-width', Math.abs(at - attack.impactAt) <= (attack.depth ? 160 : window) ? 2.5 : 1.5);
+    } };
+  }
+  function domainArt(dir) {
+    const [x, y] = lanePosition(dir, TARGET_RADIUS);
+    const node = svg('g', { transform: `translate(${x} ${y})`, 'data-domain-dir': dir });
+    const label = svg('text', { class: 'domain-number', y: 5 });
+    const queue = svg('text', { class: 'domain-queue', y: 35 });
+    node.append(
+      svg('path', { class: 'boss-main', d: 'M-17 -9L0 -19L17 -9V9L0 19L-17 9Z' }),
+      svg('path', { class: 'boss-main-cross', d: 'M-25 -13V-25H-13 M13 -25H25V-13 M25 13V25H13 M-13 25H-25V13 M-8 0H8 M0 -8V8' }),
+      label, queue
+    );
+    return { node, paint(fight) {
+      const numbers = [];
+      fight.sequence.forEach((lane, i) => { if (lane === dir && i >= fight.sequenceIndex) numbers.push(i + 1); });
+      node.setAttribute('visibility', numbers.length ? 'visible' : 'hidden');
+      node.setAttribute('data-next', String(fight.sequence[fight.sequenceIndex] === dir));
+      label.textContent = numbers[0] ?? '';
+      queue.textContent = numbers.slice(1).join(' · ');
+    } };
+  }
+  function destroyPreviewArt(dir, index, sceneId) {
+    const id = `duel-preview-${sceneId}-${index}`;
+    const node = svg('g', { 'data-preview': index, transform: `rotate(${ROTATION[dir]} 240 240)` });
+    const defs = svg('defs', {});
+    const gradient = svg('linearGradient', { id, x1: '0%', y1: '0%', x2: '0%', y2: '100%' });
+    for (const [offset, opacity] of [['0%', .95], ['32%', .55], ['100%', 0]]) {
+      gradient.append(svg('stop', { offset, 'stop-color': BOSS_TYPES.destroy.color, 'stop-opacity': opacity }));
+    }
+    defs.append(gradient);
+    const number = svg('text', { x: 240, y: 52, class: 'boss-attack-label', transform: `rotate(${-ROTATION[dir]} 240 52)` });
+    number.textContent = index + 1;
+    node.append(defs, svg('path', { d: 'M200 0H280L260 88Q240 124 220 88Z', fill: `url(#${id})` }),
+      svg('rect', { x: 207, y: 1, width: 66, height: 3, fill: '#f4c9df' }), number);
+    return { node, paint(fight, at) {
+      const age = at - fight.phaseAt - index * fight.previewInterval;
+      const duration = fight.previewDuration ?? 300;
+      const opacity = age >= 0 && age < duration ? (reducedMotion.matches ? .65 : (1 - age / duration) ** 2) : 0;
+      node.setAttribute('opacity', opacity);
+    } };
+  }
+  function reboundArt(fight) {
+    const [x, y] = lanePosition(fight.lastContact.dir, fight.lastContact.radius);
+    const [nextX, nextY] = lanePosition(fight.nextDir, 180);
+    const node = svg('path', { d: 'M-12 0L0 -12L12 0L0 12Z', fill: BOSS_TYPES[fight.kind].color });
+    return { node, paint(fight, at) {
+      const t = Math.min(1, Math.max(0, (at - fight.phaseAt) / (fight.phaseUntil - fight.phaseAt)));
+      const u = 1 - t;
+      node.setAttribute('transform', `translate(${u*u*x+2*u*t*240+t*t*nextX} ${u*u*y+2*u*t*240+t*t*nextY}) rotate(${t*220})`);
+      node.setAttribute('opacity', 1 - t * .3);
+    } };
+  }
+  function finisherArt(fight) {
+    const [x, y] = lanePosition(fight.lastContact.dir, fight.lastContact.radius);
+    const node = svg('g', { transform: `translate(${x} ${y})` });
+    const halves = ['M0 -35L-32 -18V18L0 35Z', 'M0 -35L32 -18V18L0 35Z'].map(d =>
+      svg('path', { d, fill: BOSS_TYPES[fight.kind].color, stroke: '#f1ffe9', 'stroke-width': 1.5 })
+    );
+    const slash = svg('path', { d: 'M-75 60L80 -65 M-40 74L65 -45', stroke: '#f4ffe9', 'stroke-width': 4, fill: 'none' });
+    const wave = svg('circle', { cx: 0, cy: 0, r: 24, stroke: '#c5edb2', 'stroke-width': 1, fill: 'none' });
+    node.append(...halves, slash, wave);
+    return { node, paint(fight, at) {
+      const t = Math.min(1, Math.max(0, (at - fight.phaseAt) / 1000));
+      node.setAttribute('opacity', 1 - t);
+      slash.setAttribute('opacity', Math.max(0, 1 - t * 2.5));
+      if (!reducedMotion.matches) {
+        halves.forEach((half, i) => half.setAttribute('transform', `translate(${(i ? 1 : -1)*t*90} ${-t*22}) rotate(${(i ? -1 : 1)*t*350})`));
+        wave.setAttribute('r', 24 + t * 145);
+      }
+    } };
+  }
+  function createBossScene(node, arena) {
+    const layer = node('boss-entities');
+    const sceneId = ++nextBossSceneId;
+    const attacks = new Map();
+    let phase = '', phaseArt = [];
+    function reset() {
+      phase = ''; phaseArt = []; attacks.clear(); layer.replaceChildren();
+      arena.removeAttribute('data-boss-phase');
+      node('camera').removeAttribute('transform');
+    }
+    return { reset, render(fight, at, guardWindow) {
+      if (!fight) { if (phase) reset(); return; }
+      const key = [fight.kind, fight.phase, fight.phaseAt].join(':');
+      if (phase !== key) {
+        reset();
+        phase = key;
+        arena.setAttribute('data-boss-phase', fight.phase);
+        if (fight.phase === 'reaction') phaseArt = [...new Set(fight.sequence)].map(domainArt);
+        if (fight.phase === 'telegraph') phaseArt = fight.preview.map((dir, i) => destroyPreviewArt(dir, i, sceneId));
+        if (fight.phase === 'rebound' && fight.lastContact && fight.nextDir) phaseArt = [reboundArt(fight)];
+        if (fight.phase === 'finisher' && fight.lastContact) phaseArt = [finisherArt(fight)];
+        for (const art of phaseArt) layer.append(art.node);
+      }
+      for (const art of phaseArt) art.paint(fight, at);
+      if (!reducedMotion.matches && (fight.phase === 'reaction' || fight.phase === 'finisher')) {
+        const amount = fight.phase === 'reaction' ? .11 : .16;
+        const zoom = 1 + amount * Math.min(1, Math.max(0, (at - fight.phaseAt) / 130));
+        node('camera').setAttribute('transform', `translate(240 240) scale(${zoom}) translate(-240 -240)`);
+      }
+      const pending = new Set();
+      for (const attack of fight.attacks || []) {
+        pending.add(attack.id);
+        let art = attacks.get(attack.id);
+        if (!art) {
+          art = bossAttackArt(fight.kind, attack);
+          layer.append(art.node); attacks.set(attack.id, art);
+        }
+        art.paint(at, guardWindow);
+      }
+      for (const [id, art] of attacks) {
+        if (!pending.has(id)) { art.node.remove(); attacks.delete(id); }
+      }
+    } };
+  }
+  function paintBossHUD(fight, at) {
+    $('boss-hud').hidden = !fight;
+    const meter = $('reaction-meter');
+    const banner = $('boss-banner');
+    meter.hidden = fight?.phase !== 'reaction';
+    banner.hidden = !['warning', 'finisher', 'failed'].includes(fight?.phase);
+    if (!fight) return;
+    const definition = BOSS_TYPES[fight.kind];
+    if ($('boss-name').textContent !== definition.name) $('boss-name').textContent = definition.name;
+    const pips = $('boss-pips');
+    const progress = fight.remaining + '/' + fight.total;
+    if (pips.getAttribute('data-duel-progress') !== progress) {
+      pips.replaceChildren();
+      pips.setAttribute('data-duel-progress', progress);
+      pips.style.setProperty('--boss-color', definition.color);
+      for (let i = 0; i < fight.total; i++) {
+        const pip = document.createElement('i');
+        if (i < fight.remaining) pip.className = 'live';
+        pips.append(pip);
+      }
+    }
+    const label = tr('Attempts remaining ', '남은 단계 ') + progress;
+    if (pips.getAttribute('aria-label') !== label) pips.setAttribute('aria-label', label);
+    if (!banner.hidden) {
+      const warning = fight.phase === 'warning', won = fight.phase === 'finisher';
+      banner.setAttribute('data-result', won ? 'win' : '');
+      $('boss-banner-tag').textContent = warning ? '/// INTRUSION' : won ? '/// CONNECTION SEVERED' : '-- SIGNAL LOST --';
+      $('boss-banner-title').textContent = warning ? definition.name : won
+        ? tr('Intrusion blocked', '침입 차단') : tr('Domain escaped', '도메인 이탈');
+      $('boss-banner-copy').textContent = warning ? definition.hint : '';
+    }
+    if (!meter.hidden) {
+      const remaining = Math.max(0, Math.min(1, (fight.phaseUntil - at) / (fight.phaseUntil - fight.phaseAt)));
+      $('reaction-fill').style.width = (remaining * 100) + '%';
+      meter.setAttribute('aria-valuenow', Math.round(remaining * 100));
+    }
+  }
 
   function mountRivalScene(arena, name, value, tile) {
     const art = artTemplate.cloneNode(true);
@@ -80,7 +294,8 @@
       part.removeAttribute('id');
     }
     const node = id => parts.get(id);
-    for (const id of ['decoy-folder', 'boss-entities', 'phishing-links', 'lane-states']) node(id).remove();
+    for (const id of ['decoy-folder', 'lane-states']) node(id).remove();
+    const boss = createBossScene(node, arena);
     const threats = new Map(), particles = [];
     let at = 0, posedUntil = 0, flashedUntil = 0, hitUntil = 0, penaltyUntil = 0;
     function schedule(effect, duration, draw, foreground = false) {
@@ -91,6 +306,8 @@
       node('enemies').replaceChildren();
       node('effects').replaceChildren();
       node('foreground-fx').replaceChildren();
+      node('phishing-links').replaceChildren();
+      boss.reset();
       threats.clear(); particles.length = 0;
       posedUntil = 0; flashedUntil = 0; hitUntil = 0; penaltyUntil = 0;
       resetPose(node); node('core').style.opacity = '1';
@@ -103,6 +320,7 @@
     return {
       prepare(attacks, player, time, label, selected, targeting, upgradesEnabled) {
         at = time;
+        boss.render(player.boss, at, GUARD_WINDOW);
         if (name.textContent !== label) name.textContent = label;
         const percent = player.eliminated ? tr('Out', '탈락') : player.vulnerability + '%';
         if (value.textContent !== percent) value.textContent = percent;
@@ -122,11 +340,10 @@
           pending.add(attack.attackId);
           let actor = threats.get(attack.attackId);
           if (!actor) {
-            actor = createAttackActor(attack, upgradesEnabled);
-            node('enemies').append(actor.node);
+            actor = mountAttackActor(attack, upgradesEnabled, node);
             threats.set(attack.attackId, actor);
           }
-          paintAttack(actor, at);
+          paintAttack(actor, attack, at);
         }
         return pending;
       },
@@ -134,10 +351,14 @@
         if (event.type === 'hit') {
           hitUntil = at + 280;
           glitchAt(240, 240, 39, 'damage', schedule);
+        } else if (event.type === 'worm_charge') {
+          const [x, y] = lanePosition(event.dir, 157);
+          glitchAt(x, y, 25, 'reveal', schedule);
         } else if (event.type === 'guard' || manualAttack(event)) {
           if (event.type === 'guard') breakAttack(threats.get(event.attackId), event, schedule);
-          paintStrikePose(event.dir, event.perfect, node, schedule);
-          addEffect(event.dir, event.perfect ? 'perfect' : 'guard', schedule);
+          const strong = strongGuard(event);
+          paintStrikePose(event.dir, strong, node, schedule);
+          addEffect(event.dir, strong ? 'perfect' : 'guard', schedule);
           posedUntil = at + 170; flashedUntil = at + 65;
         } else if (event.type === 'miss') {
           addEffect(event.dir, 'miss', schedule);
@@ -145,7 +366,9 @@
         }
       },
       finishFrame(pending) {
-        for (const [id, actor] of threats) if (!pending.has(id)) { actor.node.remove(); threats.delete(id); }
+        for (const [id, actor] of threats) if (!pending.has(id)) {
+          actor.node.remove(); actor.mirror?.remove(); actor.link?.remove(); threats.delete(id);
+        }
         paintTimedEffects(particles, at);
         if (at >= posedUntil && node('fighter').dataset.pose !== 'idle') resetPose(node);
         if (at >= flashedUntil || reducedMotion.matches) node('fighter').dataset.flash = 'false';
@@ -249,6 +472,8 @@
     };
     $('duel-self-name').textContent = tr('You', '나');
     $('duel-opponent-name').textContent = tr('Opponent', '상대');
+    localBoss = createBossScene($, $('arena'));
+    localBoss.reset();
     artTemplate = $('arena').querySelector('svg').cloneNode(true);
     const opponents = [...config.names.keys()].filter(id => id !== options.selfId);
     buildRivals(opponents.length ? opponents : [null]);
@@ -260,6 +485,7 @@
     if (!saved) return;
     silenceSound();
     clearRivals();
+    localBoss.reset(); localBoss = null;
     $('game-shell').removeAttribute('data-duel-group');
     $('game-shell').removeAttribute('data-duel-upgrades');
     $('duel-opponent').hidden = true;
@@ -305,7 +531,7 @@
   function upgradeText({ kind, value }) {
     const label = tr(...(upgradeLabels[kind] || ['Upgrade', '업그레이드']));
     const sign = kind === 'repair' ? '−' : '+';
-    const unit = kind === 'repair' || kind === 'mutation' ? '%p' : '%';
+    const unit = ['repair', 'mutation', 'perfect_repair'].includes(kind) ? '%p' : '%';
     return [label, sign + value + unit];
   }
   function renderUpgrade(offer) {
@@ -362,9 +588,14 @@
     effects = []; actors.clear(); lastEventId = 0; guards = 0;
     pendingTarget = null; prediction = null;
     renderUpgrade(null);
-    poseUntil = 0; flashUntil = 0; damagedUntil = 0; coreFlashUntil = 0;
+    poseUntil = 0; flashUntil = 0; damagedUntil = 0; coreFlashUntil = 0; recoveryUntil = 0;
     shake = { at: 0, until: 0, power: 0 }; resetPose();
+    localBoss.reset();
     for (const scene of rivals.values()) scene.reset();
+  }
+  function showHealing(amount) {
+    recoveryUntil = clock + 700;
+    setMessage(tr('Recovery −', '회복 −') + amount + '%p');
   }
   function render(state, ownId, at, options = {}) {
     if (!saved || !state) return;
@@ -387,7 +618,7 @@
     if (pendingTarget && (eliminated || pendingTarget.id === mine.targetId || at >= pendingTarget.until ||
       !opponents.some(player => player.id === pendingTarget.id && !player.eliminated))) pendingTarget = null;
     const targetId = pendingTarget?.id ?? mine.targetId;
-    const targeting = !!config.onTarget && !eliminated && state.status === 'running';
+    const targeting = !!config.onTarget && !eliminated && !state.boss && state.status === 'running';
     const groupLabel = targeting ? tr('Choose target', '공격 대상') : tr('Opponents', '상대');
     if ($('duel-opponents-label').textContent !== groupLabel) $('duel-opponents-label').textContent = groupLabel;
     const opponentLabel = (player, i) => (opponents.length === 1 ? options.opponentName : '') ||
@@ -396,46 +627,66 @@
       const scene = rivals.get(player.id);
       return [scene, scene.prepare(state.attacks, player, at, opponentLabel(player, i), player.id === targetId && !player.eliminated, targeting, upgradesEnabled)];
     });
+    localBoss.render(mine.boss, at, GUARD_WINDOW);
+    paintBossHUD(mine.boss, at);
     const incoming = state.attacks.filter(attack => attack.to === ownId);
     for (const attack of incoming) {
       let actor = actors.get(attack.attackId);
       if (!actor) {
-        actor = createAttackActor(attack, upgradesEnabled);
-        $('enemies').append(actor.node);
+        actor = mountAttackActor(attack, upgradesEnabled, $);
         enemies.push(actor);
         actors.set(attack.attackId, actor);
       }
-      paintAttack(actor, at);
+      paintAttack(actor, attack, at, true);
     }
     for (const event of state.events || []) {
       if (event.id <= lastEventId) continue;
       lastEventId = event.id;
       if (at - event.at > 1500) continue;
       const own = event.playerId === ownId;
+      const bossAction = event.source === 'boss';
       rivals.get(event.playerId)?.play(event);
       if (event.type === 'guard' && own) {
         breakAttack(actors.get(event.attackId), event);
+        const strong = strongGuard(event);
         const confirmsPrediction = prediction?.dir === event.dir && Math.abs(event.at - prediction.at) <= 350;
-        if (!confirmsPrediction || fxClock >= poseUntil) strikePose(event.dir, event.perfect);
+        if (!confirmsPrediction || fxClock >= poseUntil) strikePose(event.dir, strong);
         if (confirmsPrediction) prediction = null;
-        addEffect(event.dir, event.perfect ? 'perfect' : 'guard');
-        shakeCamera(event.perfect ? 2.4 : 1.4); playSound(event.perfect ? 'perfect' : 'guard'); guards++;
-        const perfectText = mine.upgrades?.perfect_energy > 0
-          ? tr('Perfect', '정밀 패링') : tr('Perfect / +½ attack energy', '정밀 패링 / 공격 에너지 +½');
-        setMessage(event.perfect ? perfectText : tr('Guarded / rival pressure reset', '방어 / 상대 연속 적중 초기화'));
+        addEffect(event.dir, strong ? 'perfect' : 'guard');
+        shakeCamera(strong ? 2.4 : 1.4); playSound(bossAction ? 'boss-hit' : strong ? 'perfect' : 'guard'); guards++;
+        if (event.healing > 0) showHealing(event.healing);
+        else if (bossAction) setMessage(tr('Boss parry', '보스 패링'));
+        else {
+          const perfectText = mine.upgrades?.perfect_energy > 0 || mine.upgrades?.guard_energy > 0
+            ? tr('Perfect', '정밀 패링') : tr('Perfect / +½ attack energy', '정밀 패링 / 공격 에너지 +½');
+          setMessage(event.perfect ? perfectText : tr('Guarded / rival pressure reset', '방어 / 상대 연속 적중 초기화'));
+        }
       } else if (own && manualAttack(event)) {
         strikePose(event.dir, false); addEffect(event.dir, 'guard'); playSound('guard');
         setMessage(tr('Attack sent ', '공격 전송 ') + arrow[event.dir]);
       } else if (event.type === 'attack' && own && event.source === 'mutation') {
         setMessage(tr('Extra virus', '추가 바이러스'));
+      } else if (event.type === 'worm_charge' && own) {
+        const [x, y] = lanePosition(event.dir, 157);
+        glitchAt(x, y, 25, 'reveal');
+        playSound('reveal');
+        setMessage(tr('Worm charging', '웜 돌진 대기'), TYPES.worm.color);
       } else if (event.type === 'upgrade' && own) {
         setMessage(tr('Upgrade · ', '업그레이드 · ') + upgradeText(event).join(' '));
+      } else if (event.type === 'boss_start') {
+        if (!eliminated) playSound('boss-warning');
+      } else if (event.type === 'boss_phase' && own) {
+        const sound = { reaction: 'boss-freeze', telegraph: 'reveal', retry: 'boss-fail', failed: 'boss-fail', finisher: 'boss-finish' }[event.phase];
+        if (sound) playSound(sound);
+      } else if (event.type === 'boss_repair' && own && event.healing > 0) {
+        showHealing(event.healing);
       } else if (event.type === 'miss' && own) {
         addEffect(event.dir, 'miss'); playSound('miss');
         const penalized = hasMissPenalty(event);
         if (penalized) damageFeedback();
         const penalty = penalized ? ' / +' + event.damage + '%p' : '';
-        setMessage(tr('Empty guard', '헛방어') + penalty, 'var(--pink)');
+        const label = event.reason === 'wrong_sequence' ? tr('Wrong sequence', '순서 오류') : tr('Empty guard', '헛방어');
+        setMessage(label + penalty, 'var(--pink)');
       } else if (event.type === 'hit') {
         if (own) { damageFeedback(true); coreFlashUntil = clock + 300; playSound('damage'); }
         if (own || event.from === ownId) {
@@ -449,6 +700,7 @@
     vulnerability = mine.vulnerability; score = guards;
     $('vulnerability-value').textContent = mine.vulnerability + '%';
     $('vulnerability-fill').style.width = Math.min(100, mine.vulnerability) + '%';
+    $('vulnerability-fill').dataset.recovering = String(clock < recoveryUntil);
     $('vulnerability').setAttribute('aria-valuenow', mine.vulnerability);
     $('vulnerability').setAttribute('aria-valuetext', mine.vulnerability + '%');
     $('score').textContent = guards; $('score-label').textContent = tr('Defenses', '방어');
@@ -461,11 +713,16 @@
       const speedText = tr('Shot speed +', '공격 속도 +') + speed + '%';
       if (speedReadout.textContent !== speedText) speedReadout.textContent = speedText;
     }
-    renderUpgrade(upgradesEnabled && state.status === 'running' && !eliminated ? mine.offer : null);
+    renderUpgrade(upgradesEnabled && state.status === 'running' && !eliminated && !state.boss ? mine.offer : null);
     const energy = Math.max(0, Math.min(3, options.energy === undefined ? mine.energy : options.energy));
     $('skill-fill').style.width = energy / 3 * 100 + '%';
     $('skill-meter').setAttribute('aria-valuenow', energy.toFixed(2));
-    $('skill').dataset.ready = String(energy >= 1);
+    const bossLocked = !!state.boss;
+    $('skill').disabled = bossLocked || eliminated;
+    $('skill').dataset.ready = String(!bossLocked && !eliminated && energy >= 1);
+    const skillHint = bossLocked ? tr('Boss round · parry only', '보스전 · 패링만 가능')
+      : tr('Space: switch · Shift + direction: attack', 'Space: 전환 · Shift + 방향: 공격');
+    if ($('skill-key').textContent !== skillHint) $('skill-key').textContent = skillHint;
     $('skill-status').textContent = tr('Attack energy ', '공격 에너지 ') + energy.toFixed(1) + ' / 3';
     if (options.stance) setStance(options.stance);
     updateEffects(); updateLaneStates(); $('core').style.opacity = clock < coreFlashUntil ? '.4' : '1';

@@ -11,7 +11,7 @@ const settle=()=>new Promise(resolve=>setImmediate(resolve));
 function createDuel(){
   const game=createHarness({'neon-parry-sound':'off'});
   game.run('window.performance={now:()=>Date.now()};Math.random=()=>0.99;');
-  for(const name of['duel-engine.js','duel-view.js','duel.js'])game.run(source(name));
+  for(const name of['duel-boss.js','duel-engine.js','duel-view.js','duel.js'])game.run(source(name));
   game.frameTime=0;return game;
 }
 function frame(game,elapsed=50){
@@ -210,6 +210,46 @@ test('four-player duel routes attacks and upgrade picks through their visible co
   assert.equal(game.run('window.__sendCalls[2].type'),'upgrade');
   assert.equal(game.run('window.__sendCalls[2].offerId'),'offer-1');
   assert.equal(game.run('window.__sendCalls[2].choiceId'),choices[1].getAttribute('data-duel-upgrade'));
+});
+
+test('a duel boss locks player attacks and shows each arena’s own fight',async()=>{
+  const game=createDuel();installOnline(game);
+  game.run("window.__mode='clash';");
+  await click(game,'duel-create');await click(game,'duel-ready');frame(game,0);
+  game.run(`
+    window.__bossMatch=NeonDuelEngine.createMatch({players:['me','other'],startAt:10000,mode:'clash'});
+    window.__showBoss=at=>{
+      window.__now=at;
+      window.__callbacks.onState({room:window.__room,battle:NeonDuelEngine.snapshot(window.__bossMatch,at),serverTime:at});
+    };
+    window.__showBoss(70000);
+  `);
+  frame(game);
+  assert.equal(game.element('boss-banner-title').textContent,'Fake Domain');
+  assert.equal(game.element('duel-upgrades').hidden,true);
+  assert.equal(game.element('skill').disabled,true);
+  key(game,'ArrowRight',{shiftKey:true});
+  assert.equal(game.run('window.__sendCalls.length'),0);
+
+  game.run(`
+    window.__showBoss(71750);
+    const mine=window.__bossMatch.players[0].boss;
+    const incoming=mine.attacks[0];
+    NeonDuelEngine.input(window.__bossMatch,'me',{type:'guard',dir:incoming.dir},incoming.impactAt);
+    window.__showBoss(incoming.impactAt);
+  `);
+  frame(game);
+  assert.equal(game.element('boss-entities').querySelectorAll('.domain-number').length,3);
+  assert.equal(game.element('duel-opponent-arena').querySelectorAll('.boss-node').length,1);
+  assert.equal(game.element('duel-opponent-arena').querySelectorAll('.domain-number').length,0);
+
+  game.run(`
+    Object.assign(window.__bossMatch.players[0].boss,{phase:'done',phaseUntil:null,result:'cleared'});
+    window.__showBoss(window.__now);
+  `);
+  frame(game);
+  assert.equal(game.element('overlay-title').textContent,'Boss cleared');
+  assert.match(game.element('overlay-copy').textContent,/Waiting for the other players/);
 });
 
 test('an older SSE snapshot cannot undo a newer authoritative input response in the original sidebar',async()=>{

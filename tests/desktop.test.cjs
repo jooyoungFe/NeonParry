@@ -424,7 +424,7 @@ test('renderer styles and scripts use one package version to avoid mixed cached 
   const refs=[...html.matchAll(/(?:src|href)="([^"]+)"/g)].map(m=>new URL(m[1],'app://neon-parry/neon-parry.html')).filter(u=>/\.(?:css|js)$/.test(u.pathname));
   assert.deepEqual(refs.map(url=>url.pathname).sort(),[
     '/config.js','/styles.css','/duel.css','/js/game.js','/js/features.js',
-    '/js/menu.js','/js/desktop.js','/js/online-client.js','/js/duel-engine.js','/js/duel-view.js','/js/duel.js'
+    '/js/menu.js','/js/desktop.js','/js/online-client.js','/js/duel-boss.js','/js/duel-engine.js','/js/duel-view.js','/js/duel.js'
   ].sort());
   for(const url of refs)assert.equal(url.searchParams.get('v'),version);
 });

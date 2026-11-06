@@ -1,9 +1,10 @@
 (function (root, factory) {
   'use strict';
-  const api = factory();
-  if (typeof module === 'object' && module.exports) module.exports = api;
+  const commonJS = typeof module === 'object' && module.exports;
+  const api = factory(commonJS ? require('./duel-boss.js') : root.NeonDuelBoss);
+  if (commonJS) module.exports = api;
   if (root) root.NeonDuelEngine = api;
-})(typeof globalThis !== 'undefined' ? globalThis : this, function () {
+})(typeof globalThis !== 'undefined' ? globalThis : this, function (Boss) {
   'use strict';
 
   // One shared ruleset for the authoritative server and offline practice.
@@ -22,6 +23,7 @@
     attackCooldownMs: 350,
     guardCooldownMs: 300,
     emptyGuardDamage: 4,
+    bossIntervalMs: 60_000,
     travelMs: 2200,
     arrivalGapMs: 520,
     guardWindowMs: 360,
@@ -42,17 +44,22 @@
     minFlightMs: 550,
     firstUpgradeMs: 8000,
     upgradeIntervalMs: 12000,
+    upgradeCap: 100,
     maxGuardCompensationMs: 120
   });
   const DIRECTIONS = Object.freeze(['up', 'right', 'down', 'left']);
   const MUTATIONS = ['trojan', 'worm', 'ransom', 'phishing', 'ddos'];
   const UPGRADE_CHOICES = {
-    mutation: { min: 14, max: 24, cap: 60 },
-    attack_speed: { min: 12, max: 22, cap: 45 },
-    recharge: { min: 14, max: 24, cap: 100 },
+    mutation: { min: 14, max: 24 },
+    attack_speed: { min: 12, max: 22 },
+    recharge: { min: 14, max: 24 },
     repair: { min: 14, max: 24 },
-    perfect_energy: { min: 20, max: 40, cap: 100 }
+    perfect_energy: { min: 20, max: 40 },
+    attack_power: { min: 8, max: 16 },
+    guard_energy: { min: 8, max: 16 },
+    perfect_repair: { min: 10, max: 20 }
   };
+  const PERSISTENT_UPGRADES = Object.keys(UPGRADE_CHOICES).filter(kind => kind !== 'repair');
   const ENEMY_TRAVEL = { virus: RULES.travelMs, trojan: 1800, worm: 900, ransom: 1250, phishing: 1900, ddos: 2200, echo: 700 };
   const ECHO_DAMAGE = 8;
   const own = (object, key) => Object.prototype.hasOwnProperty.call(object, key);
@@ -123,29 +130,37 @@
       startAt,
       seed,
       guardGraceMs: compensation(guardGraceMs),
+      boss: null,
+      bossNumber: 0,
+      nextBossAt: mode === 'clash' ? startAt + RULES.bossIntervalMs : Infinity,
       mutationRandom: randomSeed ^ 0x85ebca6b,
       now: null,
       status: 'countdown',
       winnerId: null,
       finishedAt: null,
       finishReason: null,
-      players: players.map((id, index) => ({
-        id,
-        vulnerability: 0,
-        energy: RULES.energyStart,
-        streak: 0,
-        eliminated: false,
-        targetId: players[(index + 1) % players.length],
-        offer: null,
-        offerIndex: 0,
-        offerRandom: randomSeed ^ 0x9e3779b9,
-        nextOfferAt: mode === 'clash' ? startAt + RULES.firstUpgradeMs : Infinity,
-        upgrades: { mutation: 0, attack_speed: 0, recharge: 0, perfect_energy: 0 },
-        lastAttackAt: -Infinity,
-        lastGuardAt: Object.fromEntries(DIRECTIONS.map(dir => [dir, -Infinity])),
-        lastArrivalAt: -Infinity,
-        lastSeq: -1
-      })),
+      players: players.map((id, index) => {
+        const playerSeed = seedRandom(JSON.stringify([randomSeed, id, index]));
+        return {
+          id,
+          vulnerability: 0,
+          energy: RULES.energyStart,
+          streak: 0,
+          eliminated: false,
+          boss: null,
+          targetId: players[(index + 1) % players.length],
+          offer: null,
+          offerIndex: 0,
+          offerRandom: playerSeed,
+          perfectRepairRandom: playerSeed ^ 0x9e3779b9,
+          nextOfferAt: mode === 'clash' ? startAt + RULES.firstUpgradeMs : Infinity,
+          upgrades: Object.fromEntries(PERSISTENT_UPGRADES.map(kind => [kind, 0])),
+          lastAttackAt: -Infinity,
+          lastGuardAt: Object.fromEntries(DIRECTIONS.map(dir => [dir, -Infinity])),
+          lastArrivalAt: -Infinity,
+          lastSeq: -1
+        };
+      }),
       attacks: [],
       events: [],
       nextAttackId: 1,
@@ -179,7 +194,11 @@
     match.finishedAt = at;
     match.finishReason = reason;
     match.attacks.length = 0;
-    for (const player of match.players) player.offer = null;
+    match.boss = null;
+    for (const player of match.players) {
+      player.offer = null;
+      player.boss = null;
+    }
     event(match, 'finish', at, { winnerId, reason });
   }
 
@@ -189,6 +208,7 @@
       player.targetId = null;
       player.offer = null;
       player.nextOfferAt = Infinity;
+      player.boss = null;
       if (match.mode === 'clash') event(match, 'eliminate', at, { playerId: player.id, reason });
     }
     const survivors = match.players.filter(player => !player.eliminated);
@@ -196,7 +216,7 @@
     for (const player of survivors) {
       if (eliminatedIds.has(player.targetId)) player.targetId = defaultTarget(match, player)?.id ?? null;
     }
-    if (survivors.length <= 1) {
+    if (!survivors.length || (survivors.length === 1 && !match.boss)) {
       finish(match, at, survivors[0]?.id ?? null, survivors.length ? reason : 'draw');
       return;
     }
@@ -209,9 +229,9 @@
     return ordered.find(candidate => !candidate.eliminated);
   }
 
-  function launch(match, from, to, dir, at, impactAt, kind, source, launchedAt = at) {
+  function launch(match, from, to, dir, at, impactAt, kind, source, launchedAt = at, traits = {}) {
     // Reserved Clash arrivals can wait offscreen without slowing the flight.
-    const attack = { attackId: match.nextAttackId++, from, to, dir, launchedAt, impactAt, state: 'pending', kind, source };
+    const attack = { attackId: match.nextAttackId++, from, to, dir, launchedAt, impactAt, state: 'pending', kind, source, ...traits };
     if (kind === 'phishing') {
       attack.decoyDir = opposite(dir);
       attack.revealAt = impactAt - RULES.guardWindowMs;
@@ -225,9 +245,12 @@
     for (const player of match.players) {
       if (player.nextOfferAt !== at) continue;
       const id = `offer-${++player.offerIndex}`;
-      const options = Object.entries(UPGRADE_CHOICES);
-      const choices = Array.from({ length: 3 }, () => {
-        const [[kind, { min, max }]] = options.splice(Math.floor(random(player, 'offerRandom') * options.length), 1);
+      const options = Object.keys(UPGRADE_CHOICES).filter(kind => kind === 'repair' || player.upgrades[kind] < RULES.upgradeCap);
+      const choices = Array.from({ length: Math.min(3, options.length) }, () => {
+        const [kind] = options.splice(Math.floor(random(player, 'offerRandom') * options.length), 1);
+        const range = UPGRADE_CHOICES[kind];
+        const max = kind === 'repair' ? range.max : Math.min(range.max, RULES.upgradeCap - player.upgrades[kind]);
+        const min = Math.min(range.min, max);
         return { id: kind, kind, value: min + Math.floor(random(player, 'offerRandom') * (max - min + 1)) };
       });
       player.offer = { id, choices };
@@ -243,7 +266,103 @@
 
   // The extra millisecond makes the original +/-360ms window inclusive for
   // integer server timestamps, independent of whether the tick or input ran first.
-  const settlesAt = (match, attack) => attack.impactAt + RULES.guardWindowMs + 1 + match.guardGraceMs;
+  const settlesAt = (match, attack) => attack.state === 'dormant'
+    ? Infinity : attack.impactAt + RULES.guardWindowMs + 1 + match.guardGraceMs;
+
+  function startBoss(match, at) {
+    const kind = match.bossNumber++ % 2 === 0 ? 'domain' : 'destroy';
+    const seed = seedRandom(JSON.stringify([match.seed, match.bossNumber]));
+    match.boss = { kind, startedAt: at, pausedAttacks: match.attacks };
+    match.attacks = [];
+    for (const player of match.players) {
+      if (!player.eliminated) player.boss = Boss.createFight({ kind, seed, startAt: at });
+    }
+    event(match, 'boss_start', at, { kind });
+  }
+
+  function resumeAfterBoss(match, at) {
+    if (!match.boss || match.status === 'finished') return;
+    const survivors = match.players.filter(player => !player.eliminated);
+    if (survivors.some(player => player.boss.phase !== 'done')) return;
+    if (survivors.length <= 1) {
+      finish(match, at, survivors[0]?.id ?? null, survivors.length ? 'vulnerability' : 'draw');
+      return;
+    }
+    const { kind, startedAt, pausedAttacks } = match.boss;
+    const elapsed = at - startedAt;
+    const alive = new Set(survivors.map(player => player.id));
+    match.attacks = pausedAttacks.filter(attack => alive.has(attack.from) && alive.has(attack.to));
+    for (const attack of match.attacks) {
+      for (const field of ['launchedAt', 'impactAt', 'revealAt', 'hopAt']) {
+        if (Number.isFinite(attack[field])) attack[field] += elapsed;
+      }
+    }
+    for (const player of survivors) {
+      player.boss = null;
+      player.lastArrivalAt += elapsed;
+      player.nextOfferAt += elapsed;
+    }
+    match.boss = null;
+    match.nextBossAt = at + RULES.bossIntervalMs;
+    event(match, 'boss_end', at, { kind });
+  }
+
+  function nextBossTransition(match) {
+    if (!match.boss) return match.nextBossAt;
+    let nextAt = Infinity;
+    for (const player of match.players) {
+      if (player.boss) nextAt = Math.min(nextAt, Boss.nextAt(player.boss, match.guardGraceMs));
+    }
+    return nextAt;
+  }
+
+  function applyBossEffects(match, player, effects, at) {
+    let defeated = false;
+    for (const effect of effects) {
+      const { type, amount, dir, attackId, perfect, radius, heavy, reason } = effect;
+      const details = { playerId: player.id, source: 'boss', kind: player.boss.kind, dir, attackId, perfect, radius, heavy, reason };
+      if (type === 'damage' || type === 'miss') {
+        const vulnerability = Math.round((player.vulnerability + amount) * 10) / 10;
+        // Solo bosses allow survival at exactly 100%. The next point is lethal.
+        defeated ||= vulnerability > RULES.vulnerabilityMax;
+        player.vulnerability = Math.min(RULES.vulnerabilityMax, vulnerability);
+        event(match, type === 'damage' ? 'hit' : 'miss', at, {
+          ...details, damage: amount, vulnerability: player.vulnerability
+        });
+      } else if (type === 'repair') {
+        const healing = Math.min(player.vulnerability, amount);
+        player.vulnerability = Math.round((player.vulnerability - healing) * 10) / 10;
+        event(match, 'boss_repair', at, { ...details, healing });
+      } else if (type === 'guard') {
+        event(match, 'guard', at, details);
+      }
+    }
+    return defeated;
+  }
+
+  function reportBossPhase(match, player, previous, at) {
+    const { phase, result } = player.boss;
+    if (phase === previous) return;
+    if (phase === 'done') event(match, 'boss_done', at, { playerId: player.id, cleared: result === 'cleared' });
+    else event(match, 'boss_phase', at, { playerId: player.id, phase });
+  }
+
+  function advanceBoss(match, at) {
+    if (!match.boss) {
+      startBoss(match, at);
+      return;
+    }
+    const defeated = [];
+    for (const player of match.players) {
+      if (!player.boss || Boss.nextAt(player.boss, match.guardGraceMs) > at) continue;
+      const phase = player.boss.phase;
+      const effects = Boss.advance(player.boss, at, match.guardGraceMs);
+      if (applyBossEffects(match, player, effects, at)) defeated.push(player);
+      else reportBossPhase(match, player, phase, at);
+    }
+    if (defeated.length) eliminate(match, defeated, at, 'vulnerability');
+    resumeAfterBoss(match, at);
+  }
 
   function advance(match, now) {
     if (!validTime(now)) throw new TypeError('now must be a finite timestamp.');
@@ -263,25 +382,33 @@
     // same settlement time form one batch before eliminating anyone.
     while (match.status === 'running') {
       let offerAt = Infinity;
-      for (const player of match.players) offerAt = Math.min(offerAt, player.nextOfferAt);
+      if (!match.boss) {
+        for (const player of match.players) offerAt = Math.min(offerAt, player.nextOfferAt);
+      }
       let nextHitAt = Infinity;
       for (const attack of match.attacks) nextHitAt = Math.min(nextHitAt, settlesAt(match, attack));
-      const nextAt = Math.min(offerAt, nextHitAt);
+      const bossAt = nextBossTransition(match);
+      const nextAt = Math.min(offerAt, nextHitAt, bossAt);
       if (nextAt > target) break;
       rechargeTo(match, nextAt);
       if (nextAt < nextHitAt) {
-        offerUpgrades(match, nextAt);
+        if (nextAt === bossAt) advanceBoss(match, nextAt);
+        else offerUpgrades(match, nextAt);
         continue;
       }
       const due = match.attacks.filter(attack => settlesAt(match, attack) === nextAt);
       match.attacks = match.attacks.filter(attack => settlesAt(match, attack) !== nextAt);
+      const defeated = new Set();
       for (const attack of due) {
         const attacker = findPlayer(match, attack.from);
         const defender = findPlayer(match, attack.to);
         const scoresStreak = attack.kind !== 'echo';
-        const damage = scoresStreak ? Math.min(RULES.damageMax, RULES.damageBase + attacker.streak * RULES.damageStep) : ECHO_DAMAGE;
+        const streakDamage = Math.min(RULES.damageMax, RULES.damageBase + attacker.streak * RULES.damageStep);
+        const baseDamage = attack.kind === 'worm' ? 30 : attack.kind === 'phishing' ? 40 : scoresStreak ? streakDamage : ECHO_DAMAGE;
+        const damage = Math.round(baseDamage * (1 + (attacker.upgrades.attack_power ?? 0) / 100));
         if (scoresStreak) attacker.streak += 1;
         defender.vulnerability = Math.min(RULES.vulnerabilityMax, defender.vulnerability + damage);
+        if (defender.vulnerability === RULES.vulnerabilityMax) defeated.add(defender);
         event(match, 'hit', nextAt, {
           playerId: defender.id,
           from: attack.from,
@@ -292,8 +419,7 @@
           vulnerability: defender.vulnerability
         });
       }
-      const defeated = match.players.filter(player => !player.eliminated && player.vulnerability >= RULES.vulnerabilityMax);
-      if (defeated.length) eliminate(match, defeated, nextAt, 'vulnerability');
+      if (defeated.size) eliminate(match, [...defeated], nextAt, 'vulnerability');
     }
     if (match.status === 'finished') match.now = target;
     else rechargeTo(match, target);
@@ -316,7 +442,7 @@
       value = Math.min(player.vulnerability, choice.value);
       player.vulnerability -= value;
     } else {
-      value = Math.min(UPGRADE_CHOICES[kind].cap - player.upgrades[kind], choice.value);
+      value = Math.min(RULES.upgradeCap - player.upgrades[kind], choice.value);
       player.upgrades[kind] += value;
     }
     event(match, 'upgrade', at, { playerId: player.id, offerId: offer.id, choiceId: choice.id, kind, value });
@@ -327,9 +453,34 @@
     const chance = player.upgrades.mutation;
     if (!chance || !hasRoomForAttack(match, primary.to) || random(match, 'mutationRandom') * 100 >= chance) return null;
     const kind = MUTATIONS[Math.floor(random(match, 'mutationRandom') * MUTATIONS.length)];
+    if (kind === 'worm') {
+      const occupied = match.attacks.some(attack =>
+        attack.kind === 'worm' && attack.state === 'dormant' && attack.to === primary.to && attack.dir === primary.dir);
+      if (occupied) return null;
+      const remaining = 2 + Math.floor(random(match, 'mutationRandom') * 2);
+      return launch(match, player.id, primary.to, primary.dir, at, null, kind, 'mutation', at, {
+        state: 'dormant', remaining
+      });
+    }
     const travel = travelFor(match, kind, player, at);
     const impactAt = reserveArrival(opponent, at + travel);
-    return launch(match, player.id, primary.to, primary.dir, at, impactAt, kind, 'mutation', impactAt - travel);
+    const dir = kind === 'phishing' ? opposite(primary.dir) : primary.dir;
+    return launch(match, player.id, primary.to, dir, at, impactAt, kind, 'mutation', impactAt - travel);
+  }
+
+  function tickWorms(match, defender, dir, at) {
+    for (const attack of match.attacks) {
+      if (attack.kind !== 'worm' || attack.state !== 'dormant' || attack.to !== defender.id || attack.dir !== dir) continue;
+      attack.remaining -= 1;
+      if (attack.remaining > 0) continue;
+      const owner = findPlayer(match, attack.from);
+      const travel = travelFor(match, 'worm', owner, at);
+      attack.impactAt = reserveArrival(defender, at + 200 + travel);
+      attack.launchedAt = attack.impactAt - travel;
+      attack.hopAt = at;
+      attack.state = 'pending';
+      event(match, 'worm_charge', at, { playerId: defender.id, attackId: attack.attackId, dir });
+    }
   }
 
   function input(match, playerId, command, now, options) {
@@ -352,6 +503,20 @@
       player.lastSeq = command.seq;
     }
     const at = match.now;
+    const guardAt = Math.max(match.startAt, at - compensation(options?.guardDelayMs));
+    if (match.boss) {
+      if (command.type !== 'guard') return { ok: false, reason: 'boss_active' };
+      if (player.boss.phase === 'done') return { ok: false, reason: 'boss_waiting' };
+      const phase = player.boss.phase;
+      const result = Boss.guard(player.boss, command.dir, at, guardAt, match.guardGraceMs);
+      if (applyBossEffects(match, player, result.effects, at)) {
+        eliminate(match, [player], at, 'vulnerability');
+        resumeAfterBoss(match, at);
+      } else reportBossPhase(match, player, phase, at);
+      if (!result.ok) return { ok: false, reason: result.reason };
+      const parry = result.effects.find(effect => effect.type === 'guard');
+      return { ok: true, guarded: !!parry, perfect: !!parry?.perfect };
+    }
     if (selectingUpgrade) return applyUpgrade(match, player, command, at);
     if (selectingTarget) {
       const target = findPlayer(match, command.targetId);
@@ -382,10 +547,8 @@
     // Preserve the original game's independent recovery for each direction.
     if (at - player.lastGuardAt[command.dir] < RULES.guardCooldownMs) return { ok: false, reason: 'cooldown' };
     player.lastGuardAt[command.dir] = at;
-    // Only trusted host timing affects the accuracy check. Cooldown and all
-    // state changes use receipt time and can never be moved back by the sender.
-    const guardAt = Math.max(match.startAt, at - compensation(options?.guardDelayMs));
-    const candidates = match.attacks.filter(attack => attack.to === playerId && attack.dir === command.dir &&
+    // Cooldown and state use receipt time. Only parry accuracy is compensated.
+    const candidates = match.attacks.filter(attack => attack.state !== 'dormant' && attack.to === playerId && attack.dir === command.dir &&
       attack.launchedAt <= guardAt && (attack.revealAt === undefined || attack.revealAt <= guardAt) &&
       Math.abs(attack.impactAt - guardAt) <= RULES.guardWindowMs);
     // Original parry() takes the first eligible enemy. Wider guard windows can
@@ -406,8 +569,14 @@
     match.attacks = match.attacks.filter(candidate => candidate.attackId !== attack.attackId);
     const attacker = findPlayer(match, attack.from);
     attacker.streak = 0;
-    if (perfect) player.energy = Math.min(RULES.energyMax, player.energy + RULES.perfectEnergy * (1 + player.upgrades.perfect_energy / 100));
-    event(match, 'guard', at, { playerId, attackId: attack.attackId, from: attack.from, dir: command.dir, kind: attack.kind, perfect });
+    const perfectEnergy = perfect ? RULES.perfectEnergy * (1 + player.upgrades.perfect_energy / 100) : 0;
+    player.energy = Math.min(RULES.energyMax, player.energy + perfectEnergy + (player.upgrades.guard_energy ?? 0) / 100);
+    const repairChance = player.upgrades.perfect_repair ?? 0;
+    const repair = perfect && repairChance && random(player, 'perfectRepairRandom') * 100 < repairChance ? 4 : 0;
+    const healing = Math.min(player.vulnerability, repair + (perfect && attack.kind === 'worm' ? 20 : 0));
+    player.vulnerability = Math.round((player.vulnerability - healing) * 10) / 10;
+    event(match, 'guard', at, { playerId, attackId: attack.attackId, from: attack.from, dir: command.dir, kind: attack.kind, perfect, ...(healing && { healing }) });
+    tickWorms(match, player, command.dir, at);
     if (attack.kind === 'trojan') {
       const travel = travelFor(match, 'echo', attacker, at);
       const impactAt = reserveArrival(player, at + travel);
@@ -424,6 +593,7 @@
     if (!player) return { ok: false, reason: 'invalid_player' };
     if (player.eliminated) return { ok: false, reason: 'eliminated' };
     eliminate(match, [player], match.now, 'forfeit');
+    resumeAfterBoss(match, match.now);
     return { ok: true, winnerId: match.winnerId };
   }
 
@@ -439,7 +609,12 @@
       winnerId: match.winnerId,
       finishedAt: match.finishedAt,
       finishReason: match.finishReason,
-      ...(isClash && { speedPercent: speedPercentAt(match, at), rechargeRate: rechargeRateAt(match, at) }),
+      ...(isClash && {
+        speedPercent: speedPercentAt(match, at),
+        rechargeRate: rechargeRateAt(match, at),
+        boss: match.boss && { kind: match.boss.kind, startedAt: match.boss.startedAt },
+        nextBossAt: match.boss || match.status === 'finished' ? null : match.nextBossAt
+      }),
       rules: Object.assign({}, RULES),
       players: match.players.map(player => ({
         id: player.id,
@@ -450,7 +625,8 @@
         targetId: player.targetId,
         ...(isClash && {
           offer: player.offer && { id: player.offer.id, choices: player.offer.choices.map(choice => ({ ...choice })) },
-          upgrades: { ...player.upgrades }
+          upgrades: { ...player.upgrades },
+          boss: player.boss && Boss.snapshot(player.boss)
         })
       })),
       attacks: match.attacks.map(attack => Object.assign({}, attack)),

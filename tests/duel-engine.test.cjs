@@ -17,7 +17,9 @@ const close = (actual, expected) => assert.ok(Math.abs(actual - expected) < 1e-8
 
 test('same engine runs as a browser global without CommonJS', () => {
   const sandbox = {};
-  vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../frontend/js/duel-engine.js'), 'utf8'), sandbox);
+  for (const file of ['duel-boss.js', 'duel-engine.js']) {
+    vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../frontend/js', file), 'utf8'), sandbox);
+  }
   assert.equal(typeof sandbox.NeonDuelEngine.createMatch, 'function');
   assert.equal(sandbox.NeonDuelEngine.RULES.vulnerabilityMax, 100);
 });
@@ -309,7 +311,7 @@ test('a lethal empty guard eliminates its player and the last survivor wins', ()
   assert.deepEqual(m.events.slice(-3).map(event => event.type), ['miss', 'eliminate', 'finish']);
 });
 
-test('eight idle Clash players stay in the match indefinitely without automatic attacks', () => {
+test('eight idle Clash players see no automatic rival attacks before the first boss', () => {
   const roster = Array.from({ length: 8 }, (_, index) => `p${index}`);
   assert.throws(() => E.createMatch({ players: roster }), /two distinct/);
   assert.throws(() => clash([...roster, 'p8']), /2–8 distinct/);
@@ -318,20 +320,20 @@ test('eight idle Clash players stay in the match indefinitely without automatic 
   const startAt = 3_000;
   const m = clash(roster, { startAt, seed: 'example' });
   assert.equal(E.snapshot(m, startAt - 1).status, 'countdown');
-  const now = startAt + 3_600_000;
+  const now = startAt + E.RULES.bossIntervalMs - 1;
   const idle = E.snapshot(m, now);
   assert.equal(idle.mode, 'clash');
   assert.equal(idle.status, 'running');
   assert.equal(idle.endsAt, undefined);
   assert.equal(idle.finishedAt, null);
-  assert.equal(idle.speedPercent, 150);
-  assert.equal(idle.rechargeRate, 2.5);
+  assert.equal(idle.speedPercent, 120);
+  assert.equal(idle.rechargeRate, 1.75);
   assert.equal(idle.attacks.length, 0);
   assert.equal(idle.players.every(p => p.vulnerability === 0 && !p.eliminated), true);
   assert.equal(idle.players.every(p => p.offer.id === 'offer-1'), true);
   assert.deepEqual(idle.events.map(event => [event.type, event.playerId, event.offerId]),
     roster.map(id => ['upgrade_offer', id, 'offer-1']));
-  assert.equal(attack(m, roster[0], 'up', now).impactAt, now + 880);
+  assert.equal(attack(m, roster[0], 'up', now).impactAt, now + 1000);
 });
 
 test('clash targets persist across attack overrides and retarget when a rival leaves', () => {
@@ -404,6 +406,7 @@ test('unupgraded clash retains classic damage and per-defender arrival spacing w
 test('Clash pace rises quickly at first, reaches 150% late, and preserves earlier shots in flight', () => {
   const startAt = 2000;
   const m = clash(['a', 'b', 'c'], { startAt });
+  m.nextBossAt = Infinity; // Isolate ordinary duel timing from boss intermissions.
   assert.equal(E.snapshot(m, startAt - 1).speedPercent, 0);
   assert.equal(E.snapshot(m, startAt).speedPercent, 15);
   const old = attack(m, 'a', 'up', startAt + 3500);
@@ -422,6 +425,7 @@ test('Clash pace rises quickly at first, reaches 150% late, and preserves earlie
 test('Clash recharge grows in twenty-second steps and lets players sustain a faster late burst', () => {
   const startAt = 3000;
   const m = clash(['a', 'b'], { startAt });
+  m.nextBossAt = Infinity; // Isolate ordinary duel timing from boss intermissions.
   assert.equal(E.snapshot(m, startAt - 1).rechargeRate, 1);
   for (const [elapsed, rate] of [[0, 1.25], [19999, 1.25], [20000, 1.5], [40000, 1.75], [60000, 2], [80000, 2.25], [100000, 2.5], [120000, 2.5]]) {
     assert.equal(E.snapshot(m, startAt + elapsed).rechargeRate, rate);
@@ -434,7 +438,7 @@ test('Clash recharge grows in twenty-second steps and lets players sustain a fas
 
 test('projected and authoritative recharge agree across a pace boundary and stack with a selected upgrade', () => {
   const startAt = 1250.5;
-  const m = clash(['a', 'b'], { startAt, seed: 0 });
+  const m = clash(['a', 'b'], { startAt, seed: 1 });
   const offerAt = startAt + E.RULES.firstUpgradeMs;
   const { value } = E.input(m, 'a', { type: 'upgrade', offerId: 'offer-1', choiceId: 'recharge' }, offerAt);
   assert.ok(value > 0);
@@ -456,6 +460,7 @@ test('projected and authoritative recharge agree across a pace boundary and stac
 
 test('attacks and compensated guards still work past five minutes, and a later knockout ends the match', () => {
   const m = clash(['a', 'b'], { guardGraceMs: 120 });
+  m.nextBossAt = Infinity; // Isolate ordinary duel timing from boss intermissions.
   const oldLimit = 300_000;
   const inbound = attack(m, 'b', 'up', oldLimit - 400);
   assert.equal(E.snapshot(m, oldLimit).status, 'running');
@@ -515,9 +520,9 @@ const firstUpgrade = E.RULES.firstUpgradeMs;
 const choose = (m, id, choiceId, at = firstUpgrade, offerId = 'offer-1') =>
   E.input(m, id, { type: 'upgrade', offerId, choiceId }, at);
 
-test('Clash offers three seeded choices after eight seconds, then waits twelve seconds after each pick', () => {
+test('Clash offers three player-specific seeded choices after eight seconds, then waits twelve seconds after each pick', () => {
   const roster = ['a', 'b', 'c'];
-  const m = clash(roster, { seed: 0 });
+  const m = clash(roster, { seed: 1 });
   assert.equal(firstUpgrade, 8000);
   assert.equal(E.RULES.upgradeIntervalMs, 12000);
   assert.equal(E.snapshot(m, firstUpgrade - 1).players[0].offer, null);
@@ -526,9 +531,11 @@ test('Clash offers three seeded choices after eight seconds, then waits twelve s
   const offer = before.players[0].offer;
   assert.equal(offer.choices.length, 3);
   assert.equal(new Set(offer.choices.map(choice => choice.kind)).size, 3);
-  assert.deepEqual(before.players[1].offer, offer);
-  assert.deepEqual(E.snapshot(clash(roster, { seed: 0 }), firstUpgrade).players[0].offer, offer);
-  assert.notDeepEqual(E.snapshot(clash(roster, { seed: 1 }), firstUpgrade).players[0].offer, offer);
+  assert.notDeepEqual(before.players[1].offer, offer);
+  assert.notDeepEqual(before.players[2].offer, before.players[1].offer);
+  const replay = clash(roster, { seed: 1 });
+  assert.deepEqual(E.snapshot(replay, firstUpgrade).players.map(p => p.offer), before.players.map(p => p.offer));
+  assert.notDeepEqual(E.snapshot(clash(roster, { seed: 0 }), firstUpgrade).players[0].offer, offer);
   assert.equal(lastEvent(m, 'upgrade_offer').at, firstUpgrade);
   assert.equal(choose(m, 'a', 'recharge', firstUpgrade, 'wrong').reason, 'invalid_offer');
   assert.equal(choose(m, 'a', 'unknown').reason, 'invalid_choice');
@@ -561,16 +568,62 @@ test('Clash offers three seeded choices after eight seconds, then waits twelve s
   assert.equal(E.snapshot(m, second.now).players[2].offer, null);
 
   const delayedPick = secondAt + 1000;
-  assert.equal(choose(m, 'b', 'attack_speed', delayedPick).ok, true);
+  const bChoiceId = before.players[1].offer.choices[1].id;
+  assert.equal(choose(replay, 'b', bChoiceId).ok, true);
+  assert.equal(choose(m, 'b', bChoiceId, delayedPick).ok, true);
   const delayedSecond = delayedPick + E.RULES.upgradeIntervalMs;
   assert.equal(E.snapshot(m, delayedSecond - 1).players[1].offer, null);
-  assert.deepEqual(E.snapshot(m, delayedSecond).players[1].offer, second.players[0].offer);
+  assert.deepEqual(E.snapshot(m, delayedSecond).players[1].offer, E.snapshot(replay, secondAt).players[1].offer);
   assert.deepEqual(m.events.filter(event => event.type === 'upgrade_offer' && event.offerId === 'offer-2')
     .map(({ playerId, at }) => [playerId, at]), [['a', secondAt], ['b', delayedSecond]]);
 });
 
+test('persistent upgrades cap at 100 and near-cap offers show only the amount that applies', () => {
+  const m = clash();
+  const a = player(m, 'a');
+  for (const kind of Object.keys(a.upgrades)) a.upgrades[kind] = 100;
+  a.upgrades.mutation = 98;
+  a.upgrades.attack_speed = 99;
+
+  const first = E.snapshot(m, firstUpgrade).players[0].offer;
+  const byKind = Object.fromEntries(first.choices.map(choice => [choice.kind, choice.value]));
+  assert.deepEqual(Object.keys(byKind).sort(), ['attack_speed', 'mutation', 'repair']);
+  assert.equal(byKind.mutation, 2);
+  assert.equal(byKind.attack_speed, 1);
+  assert.equal(choose(m, 'a', 'mutation').value, 2);
+
+  const secondAt = firstUpgrade + E.RULES.upgradeIntervalMs;
+  const second = E.snapshot(m, secondAt).players[0];
+  assert.equal(second.upgrades.mutation, 100);
+  assert.deepEqual(second.offer.choices.map(choice => choice.kind).sort(), ['attack_speed', 'repair']);
+  assert.equal(choose(m, 'a', 'attack_speed', secondAt, second.offer.id).value, 1);
+
+  const thirdAt = secondAt + E.RULES.upgradeIntervalMs;
+  a.vulnerability = 10;
+  const third = E.snapshot(m, thirdAt).players[0];
+  assert.ok(Object.values(third.upgrades).every(value => value === 100));
+  assert.deepEqual(third.offer.choices.map(choice => choice.kind), ['repair']);
+  assert.deepEqual(choose(m, 'a', 'repair', thirdAt, third.offer.id), { ok: true, kind: 'repair', value: 10 });
+  assert.equal(E.snapshot(m, thirdAt).players[0].vulnerability, 0);
+  const fourth = E.snapshot(m, thirdAt + E.RULES.upgradeIntervalMs).players[0];
+  assert.deepEqual(fourth.offer.choices.map(choice => choice.kind), ['repair']);
+});
+
+test('the three new upgrades apply their offered value to the choosing player only', () => {
+  for (const kind of ['attack_power', 'guard_energy', 'perfect_repair']) {
+    const m = clash(['a', 'b'], { seed: 0 });
+    const offer = E.snapshot(m, firstUpgrade).players[0].offer;
+    const choice = offer.choices.find(candidate => candidate.kind === kind);
+    assert.ok(choice.value > 0);
+    assert.deepEqual(choose(m, 'a', choice.id), { ok: true, kind, value: choice.value });
+    const state = E.snapshot(m, firstUpgrade);
+    assert.equal(state.players[0].upgrades[kind], choice.value);
+    assert.equal(state.players[1].upgrades[kind], 0);
+  }
+});
+
 test('a seeded mutation roll can add a non-Virus behind the original attack for one energy', () => {
-  for (const [seed, expected] of [[0, true], [3, false]]) {
+  for (const [seed, expected] of [[2, true], [3, false]]) {
     const m = clash(['a', 'b'], { seed });
     assert.ok(choose(m, 'a', 'mutation').value > 0);
     const result = attack(m, 'a', 'down', firstUpgrade);
@@ -594,7 +647,7 @@ test('a seeded mutation roll can add a non-Virus behind the original attack for 
 });
 
 test('selected attack speed applies to the player’s new shots without changing other attacks', () => {
-  const m = clash(['a', 'b', 'c', 'd'], { seed: 0 });
+  const m = clash(['a', 'b', 'c', 'd'], { seed: 2 });
   const old = E.input(m, 'a', { type: 'attack', dir: 'left', targetId: 'd' }, firstUpgrade - 400);
   const { value } = choose(m, 'a', 'attack_speed');
   assert.ok(value > 0);
@@ -609,7 +662,7 @@ test('selected attack speed applies to the player’s new shots without changing
 });
 
 test('clash repair reports actual vulnerability restored and perfect energy applies on the next perfect', () => {
-  const repair = clash(['a', 'b'], { seed: 2 });
+  const repair = clash(['a', 'b'], { seed: 3 });
   assert.equal(attack(repair, 'b', 'up', 0).ok, true);
   const initial = E.snapshot(repair, firstUpgrade).players[0];
   assert.equal(initial.vulnerability, 15);
@@ -628,7 +681,7 @@ test('clash repair reports actual vulnerability restored and perfect energy appl
 });
 
 test('a Trojan from mutation creates an opposite-lane echo when parried', () => {
-  const m = clash(['a', 'b'], { seed: 7 });
+  const m = clash(['a', 'b'], { seed: 317 });
   assert.equal(choose(m, 'a', 'mutation').ok, true);
   const primary = attack(m, 'a', 'left', firstUpgrade);
   const trojan = m.attacks.find(shot => shot.attackId === primary.mutationAttackId);
@@ -645,16 +698,90 @@ test('a Trojan from mutation creates an opposite-lane echo when parried', () => 
 });
 
 test('Phishing from mutation reveals the true guard lane opposite its decoy', () => {
-  const m = clash(['a', 'b'], { seed: 5 });
+  const m = clash(['a', 'b'], { seed: 148 });
   assert.equal(choose(m, 'a', 'mutation').ok, true);
   const primary = attack(m, 'a', 'left', firstUpgrade);
   const phishing = m.attacks.find(shot => shot.attackId === primary.mutationAttackId);
   assert.equal(phishing.kind, 'phishing');
-  assert.equal(phishing.decoyDir, 'right');
+  assert.equal(phishing.decoyDir, 'left');
+  assert.equal(phishing.dir, 'right');
   assert.equal(phishing.revealAt, phishing.impactAt - E.RULES.guardWindowMs);
   assert.equal(guard(m, 'b', 'left', primary.impactAt - E.RULES.guardWindowMs).guarded, true);
-  assert.equal(guard(m, 'b', 'left', phishing.revealAt - 1).guarded, false);
-  assert.equal(guard(m, 'b', 'right', phishing.revealAt).guarded, false);
-  assert.equal(guard(m, 'b', 'left', phishing.revealAt - 1 + E.RULES.guardCooldownMs).guarded, true);
+  assert.equal(guard(m, 'b', 'right', phishing.revealAt - 1).guarded, false);
+  assert.equal(guard(m, 'b', 'left', phishing.revealAt).guarded, false);
+  assert.equal(guard(m, 'b', 'right', phishing.revealAt - 1 + E.RULES.guardCooldownMs).guarded, true);
   assert.equal(lastEvent(m, 'guard').kind, 'phishing');
+});
+
+test('a summoned blue Worm waits for same-lane parries, then charges and heals on a perfect', () => {
+  const m = clash(['a', 'b'], { seed: 4 });
+  player(m, 'a').upgrades.mutation = 100;
+  let shot = attack(m, 'a', 'up', 0);
+  const worm = m.attacks.find(attack => attack.attackId === shot.mutationAttackId);
+  assert.equal(worm.kind, 'worm');
+  assert.equal(worm.state, 'dormant');
+  assert.equal(worm.impactAt, null);
+  assert.ok([2, 3].includes(worm.remaining));
+  player(m, 'a').upgrades.mutation = 0;
+
+  guard(m, 'b', 'right', 100);
+  const remaining = worm.remaining;
+  const other = attack(m, 'a', 'left', 350);
+  assert.equal(guard(m, 'b', 'up', shot.impactAt).guarded, true);
+  assert.equal(worm.remaining, remaining - 1);
+  assert.equal(guard(m, 'b', 'left', other.impactAt).guarded, true);
+  assert.equal(worm.remaining, remaining - 1);
+  let at = other.impactAt;
+  while (worm.remaining > 0) {
+    shot = attack(m, 'a', 'up', at);
+    assert.equal(shot.ok, true);
+    at = shot.impactAt;
+    assert.equal(guard(m, 'b', 'up', at).guarded, true);
+  }
+  assert.equal(worm.state, 'pending');
+  assert.equal(worm.hopAt, at);
+  assert.ok(worm.launchedAt >= at + 200);
+  player(m, 'b').vulnerability = 39;
+  assert.equal(guard(m, 'b', 'up', worm.impactAt).perfect, true);
+  assert.equal(player(m, 'b').vulnerability, 19);
+});
+
+test('duel pauses shots for identical bosses and resumes together after the slower player', () => {
+  const m = clash(['a', 'b'], { seed: 66 });
+  const bossStart = E.RULES.bossIntervalMs;
+  const sent = attack(m, 'a', 'right', bossStart - 300);
+  const opening = E.snapshot(m, bossStart);
+  assert.equal(opening.boss.kind, 'domain');
+  assert.deepEqual(opening.players[0].boss, opening.players[1].boss);
+  assert.equal(opening.attacks.length, 0);
+  assert.equal(attack(m, 'b', 'right', bossStart).reason, 'boss_active');
+  assert.equal(E.input(m, 'a', { type: 'upgrade', offerId: 'offer-1', choiceId: 'repair' }, bossStart).reason, 'boss_active');
+
+  let sawWaiting = false;
+  for (let at = bossStart + 1750; at <= bossStart + 30000; at += 20) {
+    E.advance(m, at);
+    if (!m.boss) break;
+    for (const [i, id] of ['a', 'b'].entries()) {
+      const fight = player(m, id).boss;
+      if (fight.phase === 'active' && at >= fight.attacks[0].impactAt + i * 160) {
+        assert.equal(guard(m, id, fight.attacks[0].dir, at).guarded, true);
+      } else if (fight.phase === 'reaction' && at >= fight.phaseAt + (fight.sequenceIndex + 1) * (i ? 350 : 120)) {
+        assert.equal(guard(m, id, fight.sequence[fight.sequenceIndex], at).guarded, true);
+      }
+    }
+    if (!sawWaiting && player(m, 'a').boss.phase === 'done' && player(m, 'b').boss.phase !== 'done') {
+      sawWaiting = true;
+      assert.equal(guard(m, 'a', 'up', at).reason, 'boss_waiting');
+      assert.equal(attack(m, 'a', 'up', at).reason, 'boss_active');
+      assert.equal(m.attacks.length, 0);
+    }
+  }
+  assert.ok(sawWaiting);
+  assert.equal(m.boss, null);
+  const resume = lastEvent(m, 'boss_end').at;
+  assert.equal(m.attacks.find(attack => attack.attackId === sent.attackId).impactAt, sent.impactAt + resume - bossStart);
+  assert.equal(attack(m, 'b', 'down', resume).ok, true);
+  const second = E.snapshot(m, resume + E.RULES.bossIntervalMs);
+  assert.equal(second.boss.kind, 'destroy');
+  assert.deepEqual(second.players[0].boss, second.players[1].boss);
 });

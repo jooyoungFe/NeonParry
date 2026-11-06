@@ -13,6 +13,7 @@
   let clockOffset=0, clockSamples=[], pingTimer=null, lastRenderAt=-Infinity, seq=0, selectedTarget=null;
   let practiceClock=0,lastFrame=null,nextCpuAttack=0,cpuPlans=new Map(),touches=new Map();
   const predictedGuards=new Map();
+  let cpuReactionAt=0;
   const messages={
     OFFLINE:['Set the server address first.','먼저 대전 서버 주소를 설정해 주세요.'],
     NETWORK_ERROR:['Cannot reach the server. CPU practice is available offline.','서버에 연결할 수 없습니다. CPU 연습은 오프라인으로 가능합니다.'],
@@ -36,7 +37,7 @@
       'duel-online-note':['Random 1v1 or a room for up to 8.','랜덤 1대1 또는 최대 8인 친구방.'],
       'duel-rules-title':['Rules','대전 규칙'],
       'duel-rules-text':['Directions to parry. Empty parries add 4%p vulnerability. Shift + direction to attack.','방향키로 패링하고 Shift + 방향키로 공격합니다. 헛방어를 하면 취약률이 4%p 올라요.'],
-      'duel-threats-text':['Pick an upgrade above the arenas with 1–3 or a tap. The first appears after 8 seconds. The next comes 12 seconds after you pick.','첫 능력은 8초 뒤, 다음은 고른 뒤 12초 후에 나옵니다. 경기장 위에서 1~3번 키나 터치로 고르세요.'],
+      'duel-threats-text':['Pick upgrades with 1–3 or a tap. After every minute of combat, fight a boss on your own arena. The duel resumes when everyone finishes.','능력은 1~3번 키나 터치로 고르세요. 대전 1분마다 각자 보스와 싸우고, 모두 끝나면 대전을 재개합니다.'],
       'duel-matching-label':['Finding opponent…','상대를 찾고 있습니다…'],
       'duel-matching-note':['The duel starts when another player joins matchmaking. You can cancel at any time.','다른 플레이어가 랜덤 매칭에 들어오면 시작합니다. 언제든 취소할 수 있습니다.'],
       'duel-cancel':['Cancel','취소'],'duel-room-label':['Room code · tap to copy','방 코드 · 눌러서 복사'],
@@ -175,22 +176,47 @@
     if(battle.status==='finished'){clearTimeout(pingTimer);pingTimer=null;}
   }
   function practice(){
-    stop();session='practice';practiceClock=0;nextCpuAttack=2800;seq=0;
+    stop();session='practice';practiceClock=0;nextCpuAttack=2800;cpuReactionAt=0;seq=0;
     battle=Engine.createMatch({players:['you','cpu'],startAt:2200,mode:MODE,seed:Math.floor(Math.random()*2**32)});
     mount([{id:'you',name:tr('You','나')},{id:'cpu',name:'CPU'}]);
     lastFrame=null;frame=requestAnimationFrame(draw);$('arena').focus({preventScroll:true});
   }
   function runCpu(at){
     if(battle.status!=='running')return;
+    const cpu=battle.players.find(player=>player.id==='cpu');
+    if(cpu.eliminated)return;
     const level=$('duel-cpu-level').value;
     const config=level==='rookie'?{guard:.35,jitter:210,pace:950}:level==='expert'?{guard:.9,jitter:100,pace:550}:{guard:.7,jitter:170,pace:700};
-    for(const attack of battle.attacks){
-      if(attack.to!=='cpu'||cpuPlans.has(attack.attackId))continue;
-      const attempt=Math.random()<config.guard?attack.impactAt+(Math.random()*2-1)*config.jitter:Infinity;
-      cpuPlans.set(attack.attackId,Math.max(attack.revealAt??-Infinity,attempt));
+    const fight=cpu.boss;
+    if(fight?.phase==='reaction'){
+      if(at>=cpuReactionAt){
+        Engine.input(battle,'cpu',{type:'guard',dir:fight.sequence[fight.sequenceIndex]},at);
+        cpuReactionAt=at+260;
+      }
+      return;
     }
-    for(const[id,atGuard]of cpuPlans){const attack=battle.attacks.find(a=>a.attackId===id);if(!attack){cpuPlans.delete(id);continue;}if(at>=atGuard){Engine.input(battle,'cpu',{type:'guard',dir:attack.dir},at);cpuPlans.set(id,Infinity);}}
-    if(at>=nextCpuAttack){const result=Engine.input(battle,'cpu',{type:'attack',dir:dirs[Math.floor(Math.random()*4)]},at);nextCpuAttack=at+(result.ok?config.pace+Math.random()*350:100);}
+    const attacks=battle.boss
+      ?fight.attacks
+      :battle.attacks.filter(attack=>attack.to==='cpu'&&attack.state!=='dormant');
+    const byId=new Map(attacks.map(attack=>[attack.attackId??attack.id,attack]));
+    for(const [id,attack] of byId){
+      if(cpuPlans.has(id))continue;
+      const attempt=Math.random()<config.guard?attack.impactAt+(Math.random()*2-1)*config.jitter:Infinity;
+      cpuPlans.set(id,Math.max(attack.launchedAt,attack.revealAt??-Infinity,attempt));
+    }
+    for(const [id,atGuard] of cpuPlans){
+      const attack=byId.get(id);
+      if(!attack||!attacks.includes(attack)){cpuPlans.delete(id);continue;}
+      if(at>=atGuard){
+        Engine.input(battle,'cpu',{type:'guard',dir:attack.dir},at);
+        cpuPlans.set(id,Infinity);
+        if(battle.boss&&fight.phase!=='active')break;
+      }
+    }
+    if(!battle.boss&&at>=nextCpuAttack){
+      const result=Engine.input(battle,'cpu',{type:'attack',dir:dirs[Math.floor(Math.random()*4)]},at);
+      nextCpuAttack=at+(result.ok?config.pace+Math.random()*350:100);
+    }
   }
   const ownId=()=>session==='practice'?'you':membership?.id;
   const now=()=>session==='practice'?practiceClock:Math.max(lastRenderAt,Date.now()+clockOffset);
@@ -207,6 +233,7 @@
       energy=Math.min(Engine.RULES.energyMax,energy+gained*personalRecharge);
     }
     const connection=session==='practice'?tr('CPU practice','CPU 연습'):canSend()||state.status==='finished'?'':tr('Reconnecting','재연결 중');
+    if(state.boss&&stance==='attack')setStance('guard');
     View.render(state,ownId(),at,{opponentName,energy,connection,stance,online:session==='online'});
     $('action').textContent=state.status==='finished'?session==='practice'?tr('Retry','재도전'):randomDuel?tr('Find next opponent','다음 상대 찾기'):tr('Rematch','재대전'):tr('Leave duel','대전 나가기');
     if(state.status==='countdown')View.banner('⌖',String(Math.max(1,Math.ceil((state.startAt-at)/1000))),tr('Directions: parry · Shift + direction: attack','방향키: 패링 · Shift + 방향: 공격'));
@@ -217,7 +244,11 @@
       View.banner(won?'✓':'×',title,detail);
     }else if(session==='online'&&!canSend())View.banner('Ⅱ',tr('Reconnecting…','재연결 중…'),tr('The duel continues on the server.','서버에서는 대전이 계속 진행됩니다.'));
     else if(me.eliminated)View.banner('×',tr('Eliminated','탈락'),tr('Watch the remaining players.','남은 플레이어의 대전을 볼 수 있어요.'));
-    else View.hideBanner();
+    else if(me.boss?.phase==='done'){
+      const cleared=me.boss.result==='cleared';
+      View.banner(cleared?'✓':'Ⅱ',cleared?tr('Boss cleared','보스 처치'):tr('Boss escaped','보스 이탈'),
+        tr('Waiting for the other players to finish.','다른 플레이어의 보스전이 끝나면 대전을 재개합니다.'));
+    }else View.hideBanner();
   }
   function draw(timestamp){
     if(!session||session==='matching')return;if(!battle){frame=requestAnimationFrame(draw);return;}
@@ -237,7 +268,7 @@
     });
   }
   function pickUpgrade(offerId,choiceId){
-    if(battle?.status!=='running')return;
+    if(battle?.status!=='running'||battle.boss)return;
     const offer=battle.players.find(player=>player.id===ownId()&&!player.eliminated)?.offer;
     if(!offer||offer.id!==offerId||!offer.choices.some(choice=>choice.id===choiceId))return;
     const command={type:'upgrade',offerId,choiceId};
@@ -245,7 +276,7 @@
     else if(canSend())send(command);
   }
   function selectTarget(targetId){
-    if(session!=='online'||battle?.mode!==MODE||battle.status!=='running'||!canSend())return;
+    if(session!=='online'||battle?.mode!==MODE||battle.status!=='running'||battle.boss||!canSend())return;
     const me=battle.players.find(player=>player.id===ownId());
     if(me?.eliminated||!battle.players.some(player=>player.id===targetId&&player.id!==ownId()&&!player.eliminated))return;
     selectedTarget=targetId;
@@ -255,13 +286,14 @@
   function command(dir,type=stance,inputAt=now()){
     if(!battle||battle.status!=='running'||!dirs.includes(dir)||battle.players.find(player=>player.id===ownId())?.eliminated)return;
     if(session==='online'&&!canSend())return;
+    if(battle.boss&&(type==='attack'||battle.players.find(player=>player.id===ownId())?.boss?.phase==='done'))return;
     if(type==='attack')setStance('guard');
     if(session==='practice'){
       const result=Engine.input(battle,'you',{type,dir,seq:++seq},inputAt);
       if(!result.ok&&result.reason==='energy')View.setMessage(tr('Attack charging','공격 충전 중'),'var(--muted)');
       return;
     }
-    if(type==='guard'){
+    if(type==='guard'&&!battle.boss){
       const pressedAt=performance.now(),lastPress=predictedGuards.get(dir)??-Infinity;
       if(pressedAt-lastPress>=(battle.rules?.guardCooldownMs||Engine.RULES.guardCooldownMs)){
         View.predictGuard?.(dir);
@@ -283,7 +315,7 @@
   $('duel-random').addEventListener('click',findOpponent);$('duel-cancel').addEventListener('click',()=>leave());$('duel-leave').addEventListener('click',()=>leave());$('duel-ready').addEventListener('click',ready);
   $('duel-code-input').addEventListener('keydown',event=>{if(event.code==='Enter')requestRoom(true);});
   $('duel-room-code').addEventListener('click',async()=>{try{await navigator.clipboard.writeText(room.code);feedback(tr('Room code copied.','방 코드를 복사했습니다.'));}catch{feedback(tr('Share this code: ','이 코드를 공유하세요: ')+room.code);}});
-  $('skill').addEventListener('click',()=>{if(View.isMounted()&&battle?.status==='running')setStance(stance==='guard'?'attack':'guard');});
+  $('skill').addEventListener('click',()=>{if(View.isMounted()&&battle?.status==='running'&&!battle.boss)setStance(stance==='guard'?'attack':'guard');});
   $('arena').addEventListener('pointerdown',event=>{if(!View.isMounted()||event.button>0)return;event.preventDefault();touches.set(event.pointerId,{x:event.clientX,y:event.clientY,at:now(),dir:pointerDirection(event.clientX,event.clientY,event.target),dx:0,dy:0,attack:event.shiftKey});try{$('arena').setPointerCapture(event.pointerId);}catch{}});
   $('arena').addEventListener('pointermove',event=>{const point=touches.get(event.pointerId);if(!point)return;const dx=event.clientX-point.x,dy=event.clientY-point.y;if(Math.hypot(dx,dy)>Math.hypot(point.dx,point.dy)){point.dx=dx;point.dy=dy;}});
   $('arena').addEventListener('pointerup',event=>{
@@ -305,7 +337,7 @@
       return;
     }
     const dir=keys[event.code];if(dir){event.preventDefault();if(!event.repeat)command(dir,event.shiftKey?'attack':stance);}
-    if(event.code==='Space'&&battle?.status==='running'&&!event.target.closest('[data-duel-target],[data-duel-upgrade]')){event.preventDefault();if(!event.repeat)setStance(stance==='guard'?'attack':'guard');}
+    if(event.code==='Space'&&battle?.status==='running'&&!battle.boss&&!event.target.closest('[data-duel-target],[data-duel-upgrade]')){event.preventDefault();if(!event.repeat)setStance(stance==='guard'?'attack':'guard');}
     if(event.code==='Escape'&&!event.repeat){event.preventDefault();if($('game-shell').classList.contains('expanded'))leaveFullscreen();else leave(true);}
   });
   document.addEventListener('visibilitychange',()=>{lastFrame=null;touches.clear();});
