@@ -50,19 +50,25 @@
   const DIRECTIONS = Object.freeze(['up', 'right', 'down', 'left']);
   const MUTATIONS = ['trojan', 'worm', 'ransom', 'phishing', 'ddos'];
   const UPGRADE_CHOICES = {
-    mutation: { min: 14, max: 24 },
+    mutation: { min: 14, max: 24, cap: 50 },
     attack_speed: { min: 12, max: 22 },
     recharge: { min: 14, max: 24 },
     repair: { min: 14, max: 24 },
     perfect_energy: { min: 20, max: 40 },
     attack_power: { min: 8, max: 16 },
     guard_energy: { min: 8, max: 16 },
-    perfect_repair: { min: 10, max: 20 }
+    perfect_repair: { min: 10, max: 20 },
+    attack_discount: { min: 8, max: 16 },
+    damage_resistance: { min: 8, max: 16 },
+    miss_resistance: { min: 12, max: 24 }
   };
   const PERSISTENT_UPGRADES = Object.keys(UPGRADE_CHOICES).filter(kind => kind !== 'repair');
+  const upgradeCap = kind => UPGRADE_CHOICES[kind].cap ?? RULES.upgradeCap;
+  const attackCost = player => RULES.attackCost / (1 + (player.upgrades.attack_discount ?? 0) / 100);
   const ENEMY_TRAVEL = { virus: RULES.travelMs, trojan: 1800, worm: 900, ransom: 1250, phishing: 1900, ddos: 2200, echo: 700 };
   const ECHO_DAMAGE = 8;
   const own = (object, key) => Object.prototype.hasOwnProperty.call(object, key);
+  const roundVulnerability = value => Math.round(value * 10) / 10;
   const validTime = time => typeof time === 'number' && Number.isFinite(time);
   const opposite = dir => DIRECTIONS[(DIRECTIONS.indexOf(dir) + 2) % DIRECTIONS.length];
   const compensation = ms => validTime(ms) ? Math.max(0, Math.min(ms, RULES.maxGuardCompensationMs)) : 0;
@@ -245,11 +251,11 @@
     for (const player of match.players) {
       if (player.nextOfferAt !== at) continue;
       const id = `offer-${++player.offerIndex}`;
-      const options = Object.keys(UPGRADE_CHOICES).filter(kind => kind === 'repair' || player.upgrades[kind] < RULES.upgradeCap);
+      const options = Object.keys(UPGRADE_CHOICES).filter(kind => kind === 'repair' || player.upgrades[kind] < upgradeCap(kind));
       const choices = Array.from({ length: Math.min(3, options.length) }, () => {
         const [kind] = options.splice(Math.floor(random(player, 'offerRandom') * options.length), 1);
         const range = UPGRADE_CHOICES[kind];
-        const max = kind === 'repair' ? range.max : Math.min(range.max, RULES.upgradeCap - player.upgrades[kind]);
+        const max = kind === 'repair' ? range.max : Math.min(range.max, upgradeCap(kind) - player.upgrades[kind]);
         const min = Math.min(range.min, max);
         return { id: kind, kind, value: min + Math.floor(random(player, 'offerRandom') * (max - min + 1)) };
       });
@@ -322,7 +328,7 @@
       const { type, amount, dir, attackId, perfect, radius, heavy, reason } = effect;
       const details = { playerId: player.id, source: 'boss', kind: player.boss.kind, dir, attackId, perfect, radius, heavy, reason };
       if (type === 'damage' || type === 'miss') {
-        const vulnerability = Math.round((player.vulnerability + amount) * 10) / 10;
+        const vulnerability = roundVulnerability(player.vulnerability + amount);
         // Solo bosses allow survival at exactly 100%. The next point is lethal.
         defeated ||= vulnerability > RULES.vulnerabilityMax;
         player.vulnerability = Math.min(RULES.vulnerabilityMax, vulnerability);
@@ -331,7 +337,7 @@
         });
       } else if (type === 'repair') {
         const healing = Math.min(player.vulnerability, amount);
-        player.vulnerability = Math.round((player.vulnerability - healing) * 10) / 10;
+        player.vulnerability = roundVulnerability(player.vulnerability - healing);
         event(match, 'boss_repair', at, { ...details, healing });
       } else if (type === 'guard') {
         event(match, 'guard', at, details);
@@ -405,9 +411,11 @@
         const scoresStreak = attack.kind !== 'echo';
         const streakDamage = Math.min(RULES.damageMax, RULES.damageBase + attacker.streak * RULES.damageStep);
         const baseDamage = attack.kind === 'worm' ? 30 : attack.kind === 'phishing' ? 40 : scoresStreak ? streakDamage : ECHO_DAMAGE;
-        const damage = Math.round(baseDamage * (1 + (attacker.upgrades.attack_power ?? 0) / 100));
+        const power = 1 + (attacker.upgrades.attack_power ?? 0) / 100;
+        const armor = 1 + (defender.upgrades.damage_resistance ?? 0) / 100;
+        const damage = Math.round(baseDamage * power / armor);
         if (scoresStreak) attacker.streak += 1;
-        defender.vulnerability = Math.min(RULES.vulnerabilityMax, defender.vulnerability + damage);
+        defender.vulnerability = Math.min(RULES.vulnerabilityMax, roundVulnerability(defender.vulnerability + damage));
         if (defender.vulnerability === RULES.vulnerabilityMax) defeated.add(defender);
         event(match, 'hit', nextAt, {
           playerId: defender.id,
@@ -440,9 +448,9 @@
     player.nextOfferAt = at + RULES.upgradeIntervalMs;
     if (kind === 'repair') {
       value = Math.min(player.vulnerability, choice.value);
-      player.vulnerability -= value;
+      player.vulnerability = roundVulnerability(player.vulnerability - value);
     } else {
-      value = Math.min(RULES.upgradeCap - player.upgrades[kind], choice.value);
+      value = Math.min(Math.max(0, upgradeCap(kind) - player.upgrades[kind]), choice.value);
       player.upgrades[kind] += value;
     }
     event(match, 'upgrade', at, { playerId: player.id, offerId: offer.id, choiceId: choice.id, kind, value });
@@ -450,7 +458,7 @@
   }
 
   function maybeMutate(match, player, opponent, primary, at) {
-    const chance = player.upgrades.mutation;
+    const chance = Math.min(upgradeCap('mutation'), player.upgrades.mutation);
     if (!chance || !hasRoomForAttack(match, primary.to) || random(match, 'mutationRandom') * 100 >= chance) return null;
     const kind = MUTATIONS[Math.floor(random(match, 'mutationRandom') * MUTATIONS.length)];
     if (kind === 'worm') {
@@ -529,13 +537,14 @@
     }
     if (command.type === 'attack') {
       if (at - player.lastAttackAt < RULES.attackCooldownMs) return { ok: false, reason: 'cooldown' };
-      if (player.energy + 1e-9 < RULES.attackCost) return { ok: false, reason: 'energy' };
+      const cost = attackCost(player);
+      if (player.energy + 1e-9 < cost) return { ok: false, reason: 'energy' };
       const override = findPlayer(match, command.targetId);
       const opponent = isRival(player, override) ? override : findPlayer(match, player.targetId);
       if (!hasRoomForAttack(match, opponent.id)) return { ok: false, reason: 'queue_full' };
       const travel = travelFor(match, 'virus', player, at);
       const impactAt = reserveArrival(opponent, at + travel);
-      player.energy = Math.max(0, player.energy - RULES.attackCost);
+      player.energy = Math.max(0, player.energy - cost);
       player.lastAttackAt = at;
       const launchedAt = isClash ? impactAt - travel : at;
       const attack = launch(match, playerId, opponent.id, command.dir, at, impactAt, 'virus', 'manual', launchedAt);
@@ -556,13 +565,14 @@
     candidates.sort((a, b) => a.impactAt - b.impactAt || a.attackId - b.attackId);
     const attack = candidates[0];
     if (!attack) {
-      if (isClash) player.vulnerability = Math.min(RULES.vulnerabilityMax, player.vulnerability + RULES.emptyGuardDamage);
+      const damage = isClash ? roundVulnerability(RULES.emptyGuardDamage * (1 - (player.upgrades.miss_resistance ?? 0) / 100)) : 0;
+      if (damage) player.vulnerability = Math.min(RULES.vulnerabilityMax, roundVulnerability(player.vulnerability + damage));
       event(match, 'miss', at, {
         playerId,
         dir: command.dir,
-        ...(isClash && { damage: RULES.emptyGuardDamage, vulnerability: player.vulnerability })
+        ...(isClash && { damage, vulnerability: player.vulnerability })
       });
-      if (isClash && player.vulnerability === RULES.vulnerabilityMax) eliminate(match, [player], at, 'vulnerability');
+      if (damage && player.vulnerability === RULES.vulnerabilityMax) eliminate(match, [player], at, 'vulnerability');
       return { ok: true, guarded: false, perfect: false };
     }
     const perfect = Math.abs(attack.impactAt - guardAt) <= RULES.perfectWindowMs;
@@ -574,7 +584,7 @@
     const repairChance = player.upgrades.perfect_repair ?? 0;
     const repair = perfect && repairChance && random(player, 'perfectRepairRandom') * 100 < repairChance ? 4 : 0;
     const healing = Math.min(player.vulnerability, repair + (perfect && attack.kind === 'worm' ? 20 : 0));
-    player.vulnerability = Math.round((player.vulnerability - healing) * 10) / 10;
+    player.vulnerability = roundVulnerability(player.vulnerability - healing);
     event(match, 'guard', at, { playerId, attackId: attack.attackId, from: attack.from, dir: command.dir, kind: attack.kind, perfect, ...(healing && { healing }) });
     tickWorms(match, player, command.dir, at);
     if (attack.kind === 'trojan') {
@@ -624,6 +634,7 @@
         eliminated: player.eliminated,
         targetId: player.targetId,
         ...(isClash && {
+          attackCost: attackCost(player),
           offer: player.offer && { id: player.offer.id, choices: player.offer.choices.map(choice => ({ ...choice })) },
           upgrades: { ...player.upgrades },
           boss: player.boss && Boss.snapshot(player.boss)

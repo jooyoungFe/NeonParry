@@ -15,7 +15,10 @@
     perfect_energy: ['Perfect energy', '패링 충전'],
     attack_power: ['Attack damage', '공격 피해'],
     guard_energy: ['Guard charge', '방어 충전'],
-    perfect_repair: ['Parry repair', '패링 수리']
+    perfect_repair: ['Parry repair', '패링 수리'],
+    attack_discount: ['Attack efficiency', '공격 효율'],
+    damage_resistance: ['Core armor', '코어 장갑'],
+    miss_resistance: ['Empty guard damage', '헛방어 피해']
   };
   let saved = null, actors = new Map(), lastEventId = 0, guards = 0, roundStart = null, stance = 'guard';
   let config, artTemplate, rivals = new Map(), pendingTarget, prediction, eliminated, localBoss;
@@ -530,7 +533,7 @@
   }
   function upgradeText({ kind, value }) {
     const label = tr(...(upgradeLabels[kind] || ['Upgrade', '업그레이드']));
-    const sign = kind === 'repair' ? '−' : '+';
+    const sign = kind === 'repair' || kind === 'miss_resistance' ? '−' : '+';
     const unit = ['repair', 'mutation', 'perfect_repair'].includes(kind) ? '%p' : '%';
     return [label, sign + value + unit];
   }
@@ -718,12 +721,17 @@
     $('skill-fill').style.width = energy / 3 * 100 + '%';
     $('skill-meter').setAttribute('aria-valuenow', energy.toFixed(2));
     const bossLocked = !!state.boss;
+    const attackCost = mine.attackCost ?? 1;
     $('skill').disabled = bossLocked || eliminated;
-    $('skill').dataset.ready = String(!bossLocked && !eliminated && energy >= 1);
+    $('skill').dataset.ready = String(!bossLocked && !eliminated && energy + 1e-9 >= attackCost);
     const skillHint = bossLocked ? tr('Boss round · parry only', '보스전 · 패링만 가능')
       : tr('Space: switch · Shift + direction: attack', 'Space: 전환 · Shift + 방향: 공격');
     if ($('skill-key').textContent !== skillHint) $('skill-key').textContent = skillHint;
-    $('skill-status').textContent = tr('Attack energy ', '공격 에너지 ') + energy.toFixed(1) + ' / 3';
+    const discounted = !bossLocked && attackCost < 1;
+    const energyText = tr('Attack energy ', '공격 에너지 ') + energy.toFixed(discounted ? 2 : 1) + ' / 3';
+    $('skill-status').textContent = discounted
+      ? energyText + tr(' · ' + attackCost.toFixed(2) + '/shot', ' · 공격당 ' + attackCost.toFixed(2))
+      : energyText;
     if (options.stance) setStance(options.stance);
     updateEffects(); updateLaneStates(); $('core').style.opacity = clock < coreFlashUntil ? '.4' : '1';
     if (messageUntil && clock > messageUntil) { $('message').textContent = ''; messageUntil = 0; }

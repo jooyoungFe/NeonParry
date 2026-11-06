@@ -259,6 +259,21 @@ test('forfeit handles countdown and running matches through the shared finish pa
 
 const clash = (players = ['a', 'b'], options = {}) => E.createMatch({ mode: 'clash', players, ...options });
 const fasterTravel = (base, boost) => Math.round(base * 100 / (100 + boost));
+const firstUpgrade = E.RULES.firstUpgradeMs;
+const choose = (m, id, choiceId, at = firstUpgrade, offerId = 'offer-1') =>
+  E.input(m, id, { type: 'upgrade', offerId, choiceId }, at);
+
+function offerUpgrade(m, id, kind, at = firstUpgrade) {
+  E.advance(m, at - 1);
+  const recipient = player(m, id);
+  const saved = { ...recipient.upgrades };
+  for (const other of Object.keys(saved)) {
+    if (other !== kind) recipient.upgrades[other] = other === 'mutation' ? 50 : 100;
+  }
+  E.advance(m, at);
+  Object.assign(recipient.upgrades, saved);
+  return recipient.offer.choices.find(choice => choice.kind === kind);
+}
 
 test('Clash damages only the player whose accepted guard misses', () => {
   const m = clash();
@@ -438,9 +453,10 @@ test('Clash recharge grows in twenty-second steps and lets players sustain a fas
 
 test('projected and authoritative recharge agree across a pace boundary and stack with a selected upgrade', () => {
   const startAt = 1250.5;
-  const m = clash(['a', 'b'], { startAt, seed: 1 });
-  const offerAt = startAt + E.RULES.firstUpgradeMs;
-  const { value } = E.input(m, 'a', { type: 'upgrade', offerId: 'offer-1', choiceId: 'recharge' }, offerAt);
+  const m = clash(['a', 'b'], { startAt });
+  const offerAt = startAt + firstUpgrade;
+  const recharge = offerUpgrade(m, 'a', 'recharge', offerAt);
+  const { value } = choose(m, 'a', recharge.id, offerAt);
   assert.ok(value > 0);
   const from = startAt + 19600;
   const to = startAt + 20400;
@@ -516,10 +532,6 @@ test('trusted latency can restore perfect timing without retroactively guarding 
   assert.equal(E.input(recent, 'b', { type: 'guard', dir: 'up' }, 2050, { guardDelayMs: 120 }).guarded, false);
 });
 
-const firstUpgrade = E.RULES.firstUpgradeMs;
-const choose = (m, id, choiceId, at = firstUpgrade, offerId = 'offer-1') =>
-  E.input(m, id, { type: 'upgrade', offerId, choiceId }, at);
-
 test('Clash offers three player-specific seeded choices after eight seconds, then waits twelve seconds after each pick', () => {
   const roster = ['a', 'b', 'c'];
   const m = clash(roster, { seed: 1 });
@@ -540,25 +552,20 @@ test('Clash offers three player-specific seeded choices after eight seconds, the
   assert.equal(choose(m, 'a', 'recharge', firstUpgrade, 'wrong').reason, 'invalid_offer');
   assert.equal(choose(m, 'a', 'unknown').reason, 'invalid_choice');
 
-  const recharge = offer.choices.find(choice => choice.kind === 'recharge');
-  const result = choose(m, 'a', 'recharge');
-  assert.deepEqual(result, { ok: true, kind: 'recharge', value: recharge.value });
+  const picked = offer.choices.find(choice => choice.kind !== 'repair');
+  const result = choose(m, 'a', picked.id);
+  assert.deepEqual(result, { ok: true, kind: picked.kind, value: picked.value });
   assert.equal(lastEvent(m, 'upgrade').playerId, 'a');
   assert.equal(choose(m, 'a', 'attack_speed').reason, 'invalid_offer');
   const after = E.snapshot(m, firstUpgrade);
   assert.equal(after.players[0].offer, null);
-  assert.equal(after.players[0].upgrades.recharge, result.value);
-  after.players[0].upgrades.recharge = 999;
+  assert.equal(after.players[0].upgrades[picked.kind], result.value);
+  after.players[0].upgrades[picked.kind] = 999;
   before.players[0].offer.choices[0].value = 999;
-  assert.equal(player(m, 'a').upgrades.recharge, result.value);
+  assert.equal(player(m, 'a').upgrades[picked.kind], result.value);
   assert.notEqual(before.players[1].offer.choices[0].value, 999);
   assert.notEqual(player(m, 'b').offer.choices[0].value, 999);
 
-  const shot = attack(m, 'a', 'up', firstUpgrade);
-  assert.equal(shot.ok, true);
-  E.advance(m, firstUpgrade + E.RULES.energyRechargeMs / 2);
-  close(player(m, 'a').energy, 2 + 0.5 * 1.25 * (1 + result.value / 100));
-  assert.equal(guard(m, 'b', 'up', shot.impactAt).guarded, true);
   const secondAt = firstUpgrade + E.RULES.upgradeIntervalMs;
   assert.equal(E.snapshot(m, secondAt - 1).players[0].offer, null);
   const second = E.snapshot(m, secondAt);
@@ -578,11 +585,11 @@ test('Clash offers three player-specific seeded choices after eight seconds, the
     .map(({ playerId, at }) => [playerId, at]), [['a', secondAt], ['b', delayedSecond]]);
 });
 
-test('persistent upgrades cap at 100 and near-cap offers show only the amount that applies', () => {
-  const m = clash();
+test('Extra Virus caps at 50% and other persistent upgrades cap at 100%', () => {
+  const m = clash(['a', 'b'], { seed: 4 });
   const a = player(m, 'a');
   for (const kind of Object.keys(a.upgrades)) a.upgrades[kind] = 100;
-  a.upgrades.mutation = 98;
+  a.upgrades.mutation = 48;
   a.upgrades.attack_speed = 99;
 
   const first = E.snapshot(m, firstUpgrade).players[0].offer;
@@ -591,17 +598,20 @@ test('persistent upgrades cap at 100 and near-cap offers show only the amount th
   assert.equal(byKind.mutation, 2);
   assert.equal(byKind.attack_speed, 1);
   assert.equal(choose(m, 'a', 'mutation').value, 2);
+  const shot = attack(m, 'a', 'up', firstUpgrade);
+  assert.equal(shot.ok, true);
+  assert.equal(shot.mutationAttackId, undefined); // Seed 4's first mutation roll is above 50%.
 
   const secondAt = firstUpgrade + E.RULES.upgradeIntervalMs;
   const second = E.snapshot(m, secondAt).players[0];
-  assert.equal(second.upgrades.mutation, 100);
+  assert.equal(second.upgrades.mutation, 50);
   assert.deepEqual(second.offer.choices.map(choice => choice.kind).sort(), ['attack_speed', 'repair']);
   assert.equal(choose(m, 'a', 'attack_speed', secondAt, second.offer.id).value, 1);
 
   const thirdAt = secondAt + E.RULES.upgradeIntervalMs;
   a.vulnerability = 10;
   const third = E.snapshot(m, thirdAt).players[0];
-  assert.ok(Object.values(third.upgrades).every(value => value === 100));
+  assert.ok(Object.entries(third.upgrades).every(([kind, value]) => value === (kind === 'mutation' ? 50 : 100)));
   assert.deepEqual(third.offer.choices.map(choice => choice.kind), ['repair']);
   assert.deepEqual(choose(m, 'a', 'repair', thirdAt, third.offer.id), { ok: true, kind: 'repair', value: 10 });
   assert.equal(E.snapshot(m, thirdAt).players[0].vulnerability, 0);
@@ -609,11 +619,10 @@ test('persistent upgrades cap at 100 and near-cap offers show only the amount th
   assert.deepEqual(fourth.offer.choices.map(choice => choice.kind), ['repair']);
 });
 
-test('the three new upgrades apply their offered value to the choosing player only', () => {
-  for (const kind of ['attack_power', 'guard_energy', 'perfect_repair']) {
-    const m = clash(['a', 'b'], { seed: 0 });
-    const offer = E.snapshot(m, firstUpgrade).players[0].offer;
-    const choice = offer.choices.find(candidate => candidate.kind === kind);
+test('Clash upgrades apply their offered value to the choosing player only', () => {
+  for (const kind of ['attack_power', 'guard_energy', 'perfect_repair', 'attack_discount', 'damage_resistance', 'miss_resistance']) {
+    const m = clash();
+    const choice = offerUpgrade(m, 'a', kind);
     assert.ok(choice.value > 0);
     assert.deepEqual(choose(m, 'a', choice.id), { ok: true, kind, value: choice.value });
     const state = E.snapshot(m, firstUpgrade);
@@ -622,10 +631,61 @@ test('the three new upgrades apply their offered value to the choosing player on
   }
 });
 
+test('energy efficiency lowers the required energy and cost for the player who has it', () => {
+  const m = clash();
+  const a = player(m, 'a');
+  a.upgrades.attack_discount = 100;
+  a.energy = player(m, 'b').energy = 0.5;
+  const state = E.snapshot(m, 0);
+  assert.equal(state.players[0].attackCost, 0.5);
+  assert.equal(state.players[1].attackCost, E.RULES.attackCost);
+  assert.equal(attack(m, 'a', 'up', 0).ok, true);
+  assert.equal(a.energy, 0);
+  assert.equal(attack(m, 'b', 'down', 0).reason, 'energy');
+});
+
+test('core armor reduces incoming PvP damage after the attacker’s damage boost', () => {
+  const m = clash();
+  player(m, 'a').upgrades.attack_power = 20;
+  player(m, 'b').upgrades.damage_resistance = 50;
+  attack(m, 'a', 'up', 0);
+  attack(m, 'b', 'down', 0);
+  E.advance(m, settled(0));
+  assert.equal(player(m, 'a').vulnerability, 15);
+  assert.equal(player(m, 'b').vulnerability, 12);
+});
+
+test('empty guard resistance reduces only PvP miss penalties and can prevent them entirely', () => {
+  const m = clash();
+  const a = player(m, 'a');
+  a.upgrades.miss_resistance = 33;
+  a.upgrades.damage_resistance = 100;
+  assert.equal(guard(m, 'a', 'up', 0).guarded, false);
+  assert.equal(lastEvent(m, 'miss').damage, 2.7);
+  assert.equal(a.vulnerability, 2.7);
+
+  a.upgrades.miss_resistance = 100;
+  a.vulnerability = 100;
+  assert.equal(guard(m, 'a', 'right', 0).guarded, false);
+  assert.equal(lastEvent(m, 'miss').damage, 0);
+  assert.equal(a.eliminated, false);
+
+  a.vulnerability = 0;
+  const boss = E.snapshot(m, E.RULES.bossIntervalMs + 1750).players[0].boss;
+  assert.equal(boss.kind, 'domain');
+  const incoming = boss.attacks[0];
+  const emptyLane = E.DIRECTIONS.find(dir => dir !== incoming.dir);
+  assert.equal(guard(m, 'a', emptyLane, incoming.impactAt).guarded, false);
+  assert.equal(lastEvent(m, 'miss').damage, 4);
+  E.advance(m, incoming.impactAt + 2000);
+  assert.equal(lastEvent(m, 'hit').damage, 100);
+});
+
 test('a seeded mutation roll can add a non-Virus behind the original attack for one energy', () => {
   for (const [seed, expected] of [[2, true], [3, false]]) {
     const m = clash(['a', 'b'], { seed });
-    assert.ok(choose(m, 'a', 'mutation').value > 0);
+    const mutation = offerUpgrade(m, 'a', 'mutation');
+    assert.ok(choose(m, 'a', mutation.id).value > 0);
     const result = attack(m, 'a', 'down', firstUpgrade);
     const primary = m.attacks.find(shot => shot.attackId === result.attackId);
     assert.equal(primary.kind, 'virus');
@@ -647,9 +707,10 @@ test('a seeded mutation roll can add a non-Virus behind the original attack for 
 });
 
 test('selected attack speed applies to the player’s new shots without changing other attacks', () => {
-  const m = clash(['a', 'b', 'c', 'd'], { seed: 2 });
+  const m = clash(['a', 'b', 'c', 'd']);
   const old = E.input(m, 'a', { type: 'attack', dir: 'left', targetId: 'd' }, firstUpgrade - 400);
-  const { value } = choose(m, 'a', 'attack_speed');
+  const speed = offerUpgrade(m, 'a', 'attack_speed');
+  const { value } = choose(m, 'a', speed.id);
   assert.ok(value > 0);
   const fast = attack(m, 'a', 'up', firstUpgrade);
   const regular = attack(m, 'b', 'right', firstUpgrade);
@@ -662,17 +723,19 @@ test('selected attack speed applies to the player’s new shots without changing
 });
 
 test('clash repair reports actual vulnerability restored and perfect energy applies on the next perfect', () => {
-  const repair = clash(['a', 'b'], { seed: 3 });
+  const repair = clash();
   assert.equal(attack(repair, 'b', 'up', 0).ok, true);
+  const choice = offerUpgrade(repair, 'a', 'repair');
   const initial = E.snapshot(repair, firstUpgrade).players[0];
   assert.equal(initial.vulnerability, 15);
-  assert.ok(initial.offer.choices.find(choice => choice.kind === 'repair').value > initial.vulnerability);
-  assert.equal(choose(repair, 'a', 'repair').value, initial.vulnerability);
-  assert.equal(player(repair, 'a').vulnerability, 0);
-  assert.equal(lastEvent(repair, 'upgrade').value, initial.vulnerability);
+  const healed = Math.min(choice.value, initial.vulnerability);
+  assert.equal(choose(repair, 'a', choice.id).value, healed);
+  assert.equal(player(repair, 'a').vulnerability, initial.vulnerability - healed);
+  assert.equal(lastEvent(repair, 'upgrade').value, healed);
 
-  const perfect = clash(['a', 'b'], { seed: 4 });
-  const { value } = choose(perfect, 'a', 'perfect_energy');
+  const perfect = clash();
+  const perfectEnergy = offerUpgrade(perfect, 'a', 'perfect_energy');
+  const { value } = choose(perfect, 'a', perfectEnergy.id);
   assert.ok(value > 0);
   const incoming = attack(perfect, 'b', 'down', firstUpgrade);
   assert.equal(attack(perfect, 'a', 'up', incoming.impactAt).ok, true);
@@ -682,7 +745,7 @@ test('clash repair reports actual vulnerability restored and perfect energy appl
 
 test('a Trojan from mutation creates an opposite-lane echo when parried', () => {
   const m = clash(['a', 'b'], { seed: 317 });
-  assert.equal(choose(m, 'a', 'mutation').ok, true);
+  player(m, 'a').upgrades.mutation = 20;
   const primary = attack(m, 'a', 'left', firstUpgrade);
   const trojan = m.attacks.find(shot => shot.attackId === primary.mutationAttackId);
   assert.equal(trojan.kind, 'trojan');
@@ -699,7 +762,7 @@ test('a Trojan from mutation creates an opposite-lane echo when parried', () => 
 
 test('Phishing from mutation reveals the true guard lane opposite its decoy', () => {
   const m = clash(['a', 'b'], { seed: 148 });
-  assert.equal(choose(m, 'a', 'mutation').ok, true);
+  player(m, 'a').upgrades.mutation = 20;
   const primary = attack(m, 'a', 'left', firstUpgrade);
   const phishing = m.attacks.find(shot => shot.attackId === primary.mutationAttackId);
   assert.equal(phishing.kind, 'phishing');
@@ -714,8 +777,8 @@ test('Phishing from mutation reveals the true guard lane opposite its decoy', ()
 });
 
 test('a summoned blue Worm waits for same-lane parries, then charges and heals on a perfect', () => {
-  const m = clash(['a', 'b'], { seed: 4 });
-  player(m, 'a').upgrades.mutation = 100;
+  const m = clash(['a', 'b'], { seed: 8 });
+  player(m, 'a').upgrades.mutation = 50;
   let shot = attack(m, 'a', 'up', 0);
   const worm = m.attacks.find(attack => attack.attackId === shot.mutationAttackId);
   assert.equal(worm.kind, 'worm');
