@@ -9,8 +9,8 @@
 
 <!-- Game by qqock2e: https://qqock2e.itch.io/neon-parry -->
 <!-- Renderer for the Electron app. -->
-<link rel="stylesheet" href="styles.css?v=1.4.2">
-<link rel="stylesheet" href="duel.css?v=1.4.2">
+<link rel="stylesheet" href="styles.css?v=1.4.3">
+<link rel="stylesheet" href="duel.css?v=1.4.3">
 </head>
 <body>
 <main id="game-shell">
@@ -33,7 +33,7 @@
         <button id="help-open" class="menu-button" aria-haspopup="dialog">Help</button>
         <button id="achievements-open" class="menu-button">Achievements</button>
         <button id="menu-settings" class="menu-button">Settings</button>
-        <button id="patch-open" class="patch-link" aria-haspopup="dialog">Patch notes · 1.4.2</button>
+        <button id="patch-open" class="patch-link" aria-haspopup="dialog">Patch notes · 1.4.3</button>
       </div>
     </div>
     <div class="menu-screen" data-menu-screen="mode" hidden>
@@ -113,6 +113,12 @@
 
 <div id="game-view" hidden>
 <section class="layout" data-i18n-label="a15" aria-label="Core defense game">
+<div id="duel-upgrade-slot">
+<section id="duel-upgrades" aria-labelledby="duel-upgrades-label" hidden>
+<h2 id="duel-upgrades-label">Choose 1 upgrade</h2>
+<div id="duel-upgrade-choices"></div>
+</section>
+</div>
 <div class="console">
 <p class="duel-field-heading" id="duel-self-name">You</p>
 <div class="arena" id="arena" data-i18n-label="a16" aria-label="Four-lane defense arena. Use arrow keys, WASD, or tap the incoming lane." data-state="idle">
@@ -170,10 +176,6 @@
 <div id="duel-opponent-tiles"></div>
 </div>
 </aside>
-<section id="duel-upgrades" aria-labelledby="duel-upgrades-label" hidden>
-<h2 id="duel-upgrades-label">Choose 1 upgrade</h2>
-<div id="duel-upgrade-choices"></div>
-</section>
 <aside class="sidebar" data-i18n-label="a18" aria-label="Defense status and controls">
 <div class="run-heading"><p id="run-label"></p><p id="duel-latency" hidden></p><p id="duel-speed" hidden></p><div id="stage-progress" hidden><span id="stage-goal"></span><div class="meter" id="stage-progress-meter" role="progressbar" aria-label="Stage progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><div id="stage-progress-fill"></div></div></div></div>
 <div><div class="meter-label"><label id="vulnerability-label" data-i18n="s12">Vulnerability</label><output id="vulnerability-value">0%</output></div><div class="meter" id="vulnerability" role="progressbar" aria-labelledby="vulnerability-label" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><div class="meter-fill" id="vulnerability-fill" style="width: 0%;"></div></div><div class="decoy-panel" id="decoy-panel" hidden><div class="meter-label"><label id="decoy-label" data-i18n="s10">Decoy</label><output id="decoy-value">0 / 50</output></div><div class="meter" id="decoy-meter" role="progressbar" aria-labelledby="decoy-label" aria-valuemin="0" aria-valuemax="50" aria-valuenow="0"><div class="meter-fill" id="decoy-fill" style="width: 0%;"></div></div></div></div>
@@ -185,17 +187,17 @@
 </section><footer></footer>
 </div>
 <dialog id="help-dialog" aria-labelledby="help-title"><div class="dialog-heading"><h2 id="help-title">How to play</h2><button id="help-close" class="tool-button" autofocus>Close ×</button></div><div id="help-content"></div></dialog>
-<dialog id="patch-dialog" aria-labelledby="patch-title"><div class="dialog-heading"><h2 id="patch-title">Patch notes · 1.4.2</h2><button id="patch-close" class="tool-button" autofocus>Close ×</button></div><div id="patch-content"></div></dialog>
+<dialog id="patch-dialog" aria-labelledby="patch-title"><div class="dialog-heading"><h2 id="patch-title">Patch notes · 1.4.3</h2><button id="patch-close" class="tool-button" autofocus>Close ×</button></div><div id="patch-content"></div></dialog>
 <p id="achievement-toast" class="achievement-toast" role="status" hidden></p>
 </main>
-<script src="config.js?v=1.4.2"></script>
-<script src="js/online-client.js?v=1.4.2"></script>
-<script src="js/game.js?v=1.4.2"></script>
-<script src="js/features.js?v=1.4.2"></script>
-<script src="js/menu.js?v=1.4.2"></script>
-<script src="js/duel-engine.js?v=1.4.2"></script>
-<script src="js/duel-view.js?v=1.4.2"></script>
-<script src="js/duel.js?v=1.4.2"></script>
-<script src="js/desktop.js?v=1.4.2"></script>
+<script src="config.js?v=1.4.3"></script>
+<script src="js/online-client.js?v=1.4.3"></script>
+<script src="js/game.js?v=1.4.3"></script>
+<script src="js/features.js?v=1.4.3"></script>
+<script src="js/menu.js?v=1.4.3"></script>
+<script src="js/duel-engine.js?v=1.4.3"></script>
+<script src="js/duel-view.js?v=1.4.3"></script>
+<script src="js/duel.js?v=1.4.3"></script>
+<script src="js/desktop.js?v=1.4.3"></script>
 </body>
 </html>

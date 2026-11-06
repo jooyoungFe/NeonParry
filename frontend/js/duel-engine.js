@@ -21,6 +21,7 @@
     perfectEnergy: 0.5,
     attackCooldownMs: 350,
     guardCooldownMs: 300,
+    emptyGuardDamage: 4,
     travelMs: 2200,
     arrivalGapMs: 520,
     guardWindowMs: 360,
@@ -39,8 +40,8 @@
     rechargeStepMs: 20000,
     rechargeMaxRate: 2.5,
     minFlightMs: 550,
-    firstUpgradeMs: 4000,
-    upgradeIntervalMs: 7000,
+    firstUpgradeMs: 8000,
+    upgradeIntervalMs: 12000,
     maxGuardCompensationMs: 120
   });
   const DIRECTIONS = Object.freeze(['up', 'right', 'down', 'left']);
@@ -99,9 +100,9 @@
     return Math.max(RULES.minFlightMs, Math.round(ENEMY_TRAVEL[kind] * 100 / (100 + speed)));
   }
 
-  function random(match, key) {
-    match[key] = (Math.imul(match[key], 1664525) + 1013904223) >>> 0;
-    return match[key] / 2 ** 32;
+  function random(state, key) {
+    state[key] = (Math.imul(state[key], 1664525) + 1013904223) >>> 0;
+    return state[key] / 2 ** 32;
   }
 
   function createMatch(options) {
@@ -122,8 +123,6 @@
       startAt,
       seed,
       guardGraceMs: compensation(guardGraceMs),
-      offerIndex: 0,
-      offerRandom: randomSeed ^ 0x9e3779b9,
       mutationRandom: randomSeed ^ 0x85ebca6b,
       now: null,
       status: 'countdown',
@@ -138,6 +137,9 @@
         eliminated: false,
         targetId: players[(index + 1) % players.length],
         offer: null,
+        offerIndex: 0,
+        offerRandom: randomSeed ^ 0x9e3779b9,
+        nextOfferAt: mode === 'clash' ? startAt + RULES.firstUpgradeMs : Infinity,
         upgrades: { mutation: 0, attack_speed: 0, recharge: 0, perfect_energy: 0 },
         lastAttackAt: -Infinity,
         lastGuardAt: Object.fromEntries(DIRECTIONS.map(dir => [dir, -Infinity])),
@@ -186,6 +188,7 @@
       player.eliminated = true;
       player.targetId = null;
       player.offer = null;
+      player.nextOfferAt = Infinity;
       if (match.mode === 'clash') event(match, 'eliminate', at, { playerId: player.id, reason });
     }
     const survivors = match.players.filter(player => !player.eliminated);
@@ -218,18 +221,19 @@
     return attack;
   }
 
-  const nextOfferAt = match => match.startAt + RULES.firstUpgradeMs + match.offerIndex * RULES.upgradeIntervalMs;
-  const canReceiveOffer = player => !player.eliminated && !player.offer;
-
   function offerUpgrades(match, at) {
-    const id = `offer-${++match.offerIndex}`;
-    const options = Object.entries(UPGRADE_CHOICES);
-    const choices = Array.from({ length: 3 }, () => {
-      const [[kind, { min, max }]] = options.splice(Math.floor(random(match, 'offerRandom') * options.length), 1);
-      return { id: kind, kind, value: min + Math.floor(random(match, 'offerRandom') * (max - min + 1)) };
-    });
-    for (const player of match.players.filter(canReceiveOffer)) player.offer = { id, choices };
-    event(match, 'upgrade_offer', at, { offerId: id });
+    for (const player of match.players) {
+      if (player.nextOfferAt !== at) continue;
+      const id = `offer-${++player.offerIndex}`;
+      const options = Object.entries(UPGRADE_CHOICES);
+      const choices = Array.from({ length: 3 }, () => {
+        const [[kind, { min, max }]] = options.splice(Math.floor(random(player, 'offerRandom') * options.length), 1);
+        return { id: kind, kind, value: min + Math.floor(random(player, 'offerRandom') * (max - min + 1)) };
+      });
+      player.offer = { id, choices };
+      player.nextOfferAt = Infinity;
+      event(match, 'upgrade_offer', at, { playerId: player.id, offerId: id });
+    }
   }
 
   function reserveArrival(player, earliest) {
@@ -258,7 +262,8 @@
     // Resolve chronologically even after a delayed tick. All hits with the
     // same settlement time form one batch before eliminating anyone.
     while (match.status === 'running') {
-      const offerAt = match.mode === 'clash' && match.players.some(canReceiveOffer) ? nextOfferAt(match) : Infinity;
+      let offerAt = Infinity;
+      for (const player of match.players) offerAt = Math.min(offerAt, player.nextOfferAt);
       let nextHitAt = Infinity;
       for (const attack of match.attacks) nextHitAt = Math.min(nextHitAt, settlesAt(match, attack));
       const nextAt = Math.min(offerAt, nextHitAt);
@@ -291,14 +296,7 @@
       if (defeated.length) eliminate(match, defeated, nextAt, 'vulnerability');
     }
     if (match.status === 'finished') match.now = target;
-    else {
-      if (match.mode === 'clash') {
-        // Players who still have an offer skip expired slots without a reroll.
-        const elapsed = target - match.startAt - RULES.firstUpgradeMs;
-        match.offerIndex = Math.max(match.offerIndex, Math.floor(elapsed / RULES.upgradeIntervalMs) + 1);
-      }
-      rechargeTo(match, target);
-    }
+    else rechargeTo(match, target);
     return match;
   }
 
@@ -313,6 +311,7 @@
     const { kind } = choice;
     let value;
     player.offer = null;
+    player.nextOfferAt = at + RULES.upgradeIntervalMs;
     if (kind === 'repair') {
       value = Math.min(player.vulnerability, choice.value);
       player.vulnerability -= value;
@@ -340,8 +339,9 @@
     const player = findPlayer(match, playerId);
     if (!player) return { ok: false, reason: 'invalid_player' };
     if (player.eliminated) return { ok: false, reason: 'eliminated' };
-    const selectingTarget = match.mode === 'clash' && command?.type === 'target';
-    const selectingUpgrade = match.mode === 'clash' && command?.type === 'upgrade';
+    const isClash = match.mode === 'clash';
+    const selectingTarget = isClash && command?.type === 'target';
+    const selectingUpgrade = isClash && command?.type === 'upgrade';
     if (!selectingTarget && !selectingUpgrade && command?.type !== 'attack' && command?.type !== 'guard') {
       return { ok: false, reason: 'invalid_input' };
     }
@@ -372,9 +372,9 @@
       const impactAt = reserveArrival(opponent, at + travel);
       player.energy = Math.max(0, player.energy - RULES.attackCost);
       player.lastAttackAt = at;
-      const launchedAt = match.mode === 'clash' ? impactAt - travel : at;
+      const launchedAt = isClash ? impactAt - travel : at;
       const attack = launch(match, playerId, opponent.id, command.dir, at, impactAt, 'virus', 'manual', launchedAt);
-      const mutation = match.mode === 'clash' ? maybeMutate(match, player, opponent, attack, at) : null;
+      const mutation = isClash ? maybeMutate(match, player, opponent, attack, at) : null;
       if (mutation) return { ok: true, attackId: attack.attackId, impactAt, mutationAttackId: mutation.attackId };
       return { ok: true, attackId: attack.attackId, impactAt };
     }
@@ -393,7 +393,13 @@
     candidates.sort((a, b) => a.impactAt - b.impactAt || a.attackId - b.attackId);
     const attack = candidates[0];
     if (!attack) {
-      event(match, 'miss', at, { playerId, dir: command.dir });
+      if (isClash) player.vulnerability = Math.min(RULES.vulnerabilityMax, player.vulnerability + RULES.emptyGuardDamage);
+      event(match, 'miss', at, {
+        playerId,
+        dir: command.dir,
+        ...(isClash && { damage: RULES.emptyGuardDamage, vulnerability: player.vulnerability })
+      });
+      if (isClash && player.vulnerability === RULES.vulnerabilityMax) eliminate(match, [player], at, 'vulnerability');
       return { ok: true, guarded: false, perfect: false };
     }
     const perfect = Math.abs(attack.impactAt - guardAt) <= RULES.perfectWindowMs;

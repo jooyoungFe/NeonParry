@@ -47,7 +47,10 @@ test('duel keeps the original playable arena and opens a read-only opponent prev
 
 test('original skill button and Space select one attack while Shift attacks without held-key repeats',()=>{
   const game=createDuel();startPractice(game);advance(game,2200);
-  assert.equal(game.element('arena').dataset.stance,'guard');key(game,'ArrowUp');frame(game);assert.match(game.element('message').textContent,/Empty guard/);
+  assert.equal(game.element('arena').dataset.stance,'guard');
+  key(game,'ArrowUp');frame(game);
+  assert.match(game.element('message').textContent,/Empty guard.*\+4%p/);
+  assert.equal(game.element('vulnerability-value').textContent,'4%');
   game.element('skill').click();assert.equal(game.element('skill').getAttribute('aria-pressed'),'true');assert.equal(game.element('arena').dataset.stance,'attack');
   key(game,'ArrowRight');frame(game);assert.match(game.element('message').textContent,/Attack sent →/);assert.equal(game.element('skill').getAttribute('aria-pressed'),'false');assert.equal(game.element('arena').dataset.stance,'guard');
   assert.equal(game.element('fighter').dataset.pose,'right');assert.ok(game.element('effects').children.length>0);
@@ -55,6 +58,7 @@ test('original skill button and Space select one attack while Shift attacks with
   assert.equal(opponentArena.querySelectorAll('[data-kind="virus"]').length,1,'the manual shot appears on the right');
   assert.equal(opponentArena.querySelector('[data-kind="virus"]').getAttribute('visibility'),'visible');
   assert.equal(game.element('enemies').children.length,0);
+  assert.equal(game.element('vulnerability-value').textContent,'4%','a deliberate attack does not add vulnerability');
   key(game,'Space');assert.equal(game.element('arena').dataset.stance,'attack');key(game,'Space',{repeat:true});assert.equal(game.element('arena').dataset.stance,'attack');key(game,'Space');assert.equal(game.element('arena').dataset.stance,'guard');
   advance(game,350);key(game,'ArrowDown',{shiftKey:true,repeat:true});frame(game);assert.match(game.element('message').textContent,/Attack sent →/);
   key(game,'ArrowDown',{shiftKey:true});frame(game);assert.match(game.element('message').textContent,/Attack sent ↓/);assert.equal(game.element('arena').dataset.stance,'guard');
@@ -190,17 +194,19 @@ test('four-player duel routes attacks and upgrade picks through their visible co
   await settle();
 
   game.run(`
-    window.__now=14000;
+    window.__now=18000;
     const match=NeonDuelEngine.createMatch({players:window.__room.players.map(player=>player.id),startAt:10000,mode:'clash',seed:123});
-    window.__callbacks.onState({room:window.__room,battle:NeonDuelEngine.snapshot(match,14000),serverTime:14000});
+    window.__callbacks.onState({room:window.__room,battle:NeonDuelEngine.snapshot(match,18000),serverTime:18000});
   `);
   frame(game);
-  const choices=game.element('duel-upgrades').querySelectorAll('[data-duel-upgrade]');
+  const slot=game.element('duel-upgrade-slot');
+  const choices=slot.querySelectorAll('[data-duel-upgrade]');
+  assert.ok(slot.parentNode.children.indexOf(slot)<slot.parentNode.children.findIndex(node=>node.classList.contains('console')));
   assert.equal(choices.length,3);
-  assert.equal(game.element('duel-speed').textContent,'Shot speed +30%');
+  assert.equal(game.element('duel-speed').textContent,'Shot speed +45%');
   assert.equal(game.element('duel-upgrades').hidden,false);
   assert.equal(game.element('overlay').hidden,true,'drafting leaves the arena playable');
-  key(game,'Digit2');await settle();
+  key(game,'Digit2',{shiftKey:true});await settle();
   assert.equal(game.run('window.__sendCalls[2].type'),'upgrade');
   assert.equal(game.run('window.__sendCalls[2].offerId'),'offer-1');
   assert.equal(game.run('window.__sendCalls[2].choiceId'),choices[1].getAttribute('data-duel-upgrade'));

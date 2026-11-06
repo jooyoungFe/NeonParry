@@ -70,7 +70,7 @@ await api.cancelMatch(ticket.ticketId, ticket.ticketToken);
 
 `clash`에서는 `{type:"target",targetId,seq}`로 살아 있는 상대를 선택합니다. 공격에 `targetId`를 붙여 해당 공격만 다른 상대에게 보낼 수도 있습니다. 업그레이드는 현재 본인에게 온 `offer`의 ID와 선택지 ID를 `{type:"upgrade",offerId,choiceId,seq}`로 보냅니다.
 
-형식이 유효한 요청은 HTTP 200으로 `{ok,reason?,attackId?,impactAt?,guarded?,perfect?,state}`를 반환합니다. `state`는 아래 전투 상태입니다. 에너지 부족(`energy`), 재사용 대기(`cooldown`), 중복(`duplicate`), 시작 전(`countdown`), 종료 후(`finished`) 등은 `ok:false`로 반환합니다. 허용된 수비 입력이 공격을 막지 못한 경우 `ok:true,guarded:false`입니다. `guarded:true`일 때 `perfect`로 정밀 패링 여부를 확인합니다.
+형식이 유효한 요청은 HTTP 200으로 `{ok,reason?,attackId?,impactAt?,guarded?,perfect?,state}`를 반환합니다. `state`는 아래 전투 상태입니다. 에너지 부족(`energy`), 재사용 대기(`cooldown`), 중복(`duplicate`), 시작 전(`countdown`), 종료 후(`finished`) 등은 `ok:false`로 반환합니다. 허용된 수비 입력이 공격을 막지 못한 경우 `ok:true,guarded:false`입니다. `clash`의 헛방어는 취약률을 4%p 올리며, `miss` 이벤트에 페널티와 변경된 취약률을 담습니다. `guarded:true`일 때 `perfect`로 정밀 패링 여부를 확인합니다.
 
 `clash` 온라인 판정은 서버가 확인한 왕복 지연의 절반을 최대 120ms까지 패링 수신 시각에 보정합니다. `classic`은 수신 시각 그대로 판정합니다. 클라이언트 시각은 사용하지 않습니다. 원래 쉬움 난이도의 도착 ±360ms 패링 창과 ±100ms 정밀 창을 사용하며, 패링 창이 지난 뒤 피해를 확정합니다. 방향별 재사용 대기시간은 300ms입니다.
 

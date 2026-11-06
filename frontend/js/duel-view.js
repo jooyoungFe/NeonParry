@@ -8,11 +8,11 @@
   const stateIds = ['overlay', 'skill-choices', 'skill', 'skill-meter', 'skill-fill', 'share', 'next-stage', 'stage-progress', 'boss-hud', 'boss-banner', 'reaction-meter', 'vulnerability', 'vulnerability-fill', 'state-light', 'arena', 'decoy-panel', 'decoy-folder', 'folder-capacity', 'camera', 'world', 'core', 'game-view', 'main-menu', 'menu-open', 'game-shell', 'guard-band', 'guard-outer', 'guard-inner', 'guard-pose'];
   const arrow = { up: '↑', right: '→', down: '↓', left: '←' };
   const upgradeLabels = {
-    mutation: ['Extra virus chance', '추가 바이러스 확률'],
+    mutation: ['Extra virus', '추가 바이러스'],
     attack_speed: ['Shot speed', '공격 속도'],
-    recharge: ['Recharge speed', '충전 속도'],
+    recharge: ['Recharge', '충전 속도'],
     repair: ['Repair', '코어 수리'],
-    perfect_energy: ['Perfect energy', '정밀 패링 에너지']
+    perfect_energy: ['Perfect energy', '패링 충전']
   };
   let saved = null, actors = new Map(), lastEventId = 0, guards = 0, roundStart = null, stance = 'guard';
   let config, artTemplate, rivals = new Map(), pendingTarget, prediction, eliminated;
@@ -70,6 +70,7 @@
     shatterEnemy({ dir: event.dir, kind: actor?.kind || attackKind(event.kind), radius }, event.perfect, schedule);
   }
   function manualAttack(event) { return event.type === 'attack' && (!event.source || event.source === 'manual'); }
+  function hasMissPenalty(event) { return Number.isFinite(event.damage) && event.damage > 0; }
 
   function mountRivalScene(arena, name, value, tile) {
     const art = artTemplate.cloneNode(true);
@@ -81,7 +82,7 @@
     const node = id => parts.get(id);
     for (const id of ['decoy-folder', 'boss-entities', 'phishing-links', 'lane-states']) node(id).remove();
     const threats = new Map(), particles = [];
-    let at = 0, posedUntil = 0, flashedUntil = 0, hitUntil = 0;
+    let at = 0, posedUntil = 0, flashedUntil = 0, hitUntil = 0, penaltyUntil = 0;
     function schedule(effect, duration, draw, foreground = false) {
       node(foreground ? 'foreground-fx' : 'effects').append(effect);
       particles.push({ node: effect, at, duration, draw }); draw(0);
@@ -91,9 +92,10 @@
       node('effects').replaceChildren();
       node('foreground-fx').replaceChildren();
       threats.clear(); particles.length = 0;
-      posedUntil = 0; flashedUntil = 0; hitUntil = 0;
+      posedUntil = 0; flashedUntil = 0; hitUntil = 0; penaltyUntil = 0;
       resetPose(node); node('core').style.opacity = '1';
       arena.removeAttribute('data-damaged');
+      value.removeAttribute('data-penalty');
       value.textContent = '0%';
     }
     reset();
@@ -137,7 +139,10 @@
           paintStrikePose(event.dir, event.perfect, node, schedule);
           addEffect(event.dir, event.perfect ? 'perfect' : 'guard', schedule);
           posedUntil = at + 170; flashedUntil = at + 65;
-        } else if (event.type === 'miss') addEffect(event.dir, 'miss', schedule);
+        } else if (event.type === 'miss') {
+          addEffect(event.dir, 'miss', schedule);
+          if (hasMissPenalty(event)) penaltyUntil = at + 240;
+        }
       },
       finishFrame(pending) {
         for (const [id, actor] of threats) if (!pending.has(id)) { actor.node.remove(); threats.delete(id); }
@@ -145,6 +150,8 @@
         if (at >= posedUntil && node('fighter').dataset.pose !== 'idle') resetPose(node);
         if (at >= flashedUntil || reducedMotion.matches) node('fighter').dataset.flash = 'false';
         const damaged = at < hitUntil;
+        const penalized = String(at < penaltyUntil);
+        if (value.dataset.penalty !== penalized) value.setAttribute('data-penalty', penalized);
         node('core').style.opacity = damaged ? '.4' : '1';
         arena.dataset.damaged = String(damaged);
       },
@@ -224,6 +231,7 @@
     $('camera').removeAttribute('transform'); $('world').removeAttribute('transform'); resetPose();
     $('core').style.opacity = '1'; $('arena').dataset.state = 'running'; $('arena').dataset.armed = 'false';
     $('game-shell').dataset.runMode = 'duel'; $('state-light').dataset.mode = 'running';
+    if (options.upgradesEnabled) $('game-shell').setAttribute('data-duel-upgrades', '');
     for (const id of ['overlay', 'skill-choices', 'share', 'next-stage', 'stage-progress', 'boss-hud', 'boss-banner', 'reaction-meter', 'decoy-panel']) $(id).hidden = true;
     $('decoy-folder').setAttribute('visibility', 'hidden');
     for (const item of document.querySelectorAll('[data-unlock]')) item.hidden = true;
@@ -339,7 +347,6 @@
       return button;
     }));
     panel.hidden = false;
-    if (newOffer) setMessage(label);
   }
   function setStance(value) {
     stance = value === 'attack' ? 'attack' : 'guard';
@@ -424,7 +431,11 @@
       } else if (event.type === 'upgrade' && own) {
         setMessage(tr('Upgrade · ', '업그레이드 · ') + upgradeText(event).join(' '));
       } else if (event.type === 'miss' && own) {
-        addEffect(event.dir, 'miss'); playSound('miss'); setMessage(tr('Empty guard', '헛방어'), 'var(--pink)');
+        addEffect(event.dir, 'miss'); playSound('miss');
+        const penalized = hasMissPenalty(event);
+        if (penalized) damageFeedback();
+        const penalty = penalized ? ' / +' + event.damage + '%p' : '';
+        setMessage(tr('Empty guard', '헛방어') + penalty, 'var(--pink)');
       } else if (event.type === 'hit') {
         if (own) { damageFeedback(true); coreFlashUntil = clock + 300; playSound('damage'); }
         if (own || event.from === ownId) {

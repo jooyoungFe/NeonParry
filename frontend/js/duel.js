@@ -35,8 +35,8 @@
       'duel-settings-label':['Connection settings','접속 설정'],'duel-name-label':['Name','이름'],'duel-server-url-label':['Server address','서버 주소'],
       'duel-online-note':['Random 1v1 or a room for up to 8.','랜덤 1대1 또는 최대 8인 친구방.'],
       'duel-rules-title':['Rules','대전 규칙'],
-      'duel-rules-text':['Directions to parry. Shift + direction to attack. In a group, tap a rival to target them.','방향키로 패링, Shift + 방향키로 공격합니다. 여러 명이면 상대 화면을 눌러 공격 대상을 바꿀 수 있어요.'],
-      'duel-threats-text':['The first upgrade appears at 4 seconds, then every 7 seconds. Shots and energy recharge speed up during the duel.','첫 능력은 4초 뒤, 이후 7초마다 나옵니다. 대전이 길어질수록 공격과 에너지 충전이 빨라져요.'],
+      'duel-rules-text':['Directions to parry. Empty parries add 4%p vulnerability. Shift + direction to attack.','방향키로 패링하고 Shift + 방향키로 공격합니다. 헛방어를 하면 취약률이 4%p 올라요.'],
+      'duel-threats-text':['Pick an upgrade above the arenas with 1–3 or a tap. The first appears after 8 seconds. The next comes 12 seconds after you pick.','첫 능력은 8초 뒤, 다음은 고른 뒤 12초 후에 나옵니다. 경기장 위에서 1~3번 키나 터치로 고르세요.'],
       'duel-matching-label':['Finding opponent…','상대를 찾고 있습니다…'],
       'duel-matching-note':['The duel starts when another player joins matchmaking. You can cancel at any time.','다른 플레이어가 랜덤 매칭에 들어오면 시작합니다. 언제든 취소할 수 있습니다.'],
       'duel-cancel':['Cancel','취소'],'duel-room-label':['Room code · tap to copy','방 코드 · 눌러서 복사'],
@@ -55,7 +55,10 @@
   function setup(){lobby();feedback();labels();if(!$('duel-server-url').value)$('duel-server-url').value=window.NEON_CONFIG?.apiBaseUrl||'';}
   function open(){pauseGame();setup();$('duel-title').focus({preventScroll:true});}
   function mount(players){
-    View.mount({players,selfId:ownId(),onTarget:session==='online'?selectTarget:null,onUpgrade:pickUpgrade});
+    View.mount({
+      players,selfId:ownId(),onTarget:session==='online'?selectTarget:null,onUpgrade:pickUpgrade,
+      upgradesEnabled:session==='practice'||room?.mode===MODE
+    });
     $('duel-view').hidden=true;$('main-menu').hidden=true;showGameView();setStance('guard');unlockAudio();
   }
   function resetClock(){
@@ -302,7 +305,7 @@
       return;
     }
     const dir=keys[event.code];if(dir){event.preventDefault();if(!event.repeat)command(dir,event.shiftKey?'attack':stance);}
-    if(event.code==='Space'&&battle?.status==='running'&&!event.target.closest('[data-duel-target]')){event.preventDefault();if(!event.repeat)setStance(stance==='guard'?'attack':'guard');}
+    if(event.code==='Space'&&battle?.status==='running'&&!event.target.closest('[data-duel-target],[data-duel-upgrade]')){event.preventDefault();if(!event.repeat)setStance(stance==='guard'?'attack':'guard');}
     if(event.code==='Escape'&&!event.repeat){event.preventDefault();if($('game-shell').classList.contains('expanded'))leaveFullscreen();else leave(true);}
   });
   document.addEventListener('visibilitychange',()=>{lastFrame=null;touches.clear();});
