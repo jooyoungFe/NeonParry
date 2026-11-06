@@ -29,17 +29,11 @@
     maxEvents: 32,
     clashMaxPlayers: 8,
     clashMaxEvents: 96,
-    waveDelayMs: 3500,
-    waveIntervalMs: 3600,
-    comboThreshold: 3,
     firstUpgradeMs: 8000,
     upgradeIntervalMs: 13000,
-    speedStepMs: 1600,
-    maxSpeedPercent: 25,
     maxGuardCompensationMs: 120
   });
   const DIRECTIONS = Object.freeze(['up', 'right', 'down', 'left']);
-  const WAVE_ORDER = ['virus', 'trojan', 'worm', 'ransom', 'phishing', 'ddos'];
   const MUTATIONS = ['trojan', 'worm', 'ransom', 'phishing', 'ddos'];
   const UPGRADE_CHOICES = {
     mutation: { min: 14, max: 24, cap: 60 },
@@ -48,15 +42,8 @@
     repair: { min: 14, max: 24 },
     perfect_energy: { min: 20, max: 40, cap: 100 }
   };
-  const THREATS = {
-    virus: { travelMs: RULES.travelMs, damage: 12 },
-    trojan: { travelMs: 1800, damage: 16 },
-    worm: { travelMs: 900, damage: 15 },
-    ransom: { travelMs: 1250, damage: 24 },
-    phishing: { travelMs: 1900, damage: 20 },
-    ddos: { travelMs: 2200, damage: 18 },
-    echo: { travelMs: 700, damage: 8 }
-  };
+  const ENEMY_TRAVEL = { virus: RULES.travelMs, trojan: 1800, worm: 900, ransom: 1250, phishing: 1900, ddos: 2200, echo: 700 };
+  const ECHO_DAMAGE = 8;
   const own = (object, key) => Object.prototype.hasOwnProperty.call(object, key);
   const validTime = time => typeof time === 'number' && Number.isFinite(time);
   const opposite = dir => DIRECTIONS[(DIRECTIONS.indexOf(dir) + 2) % DIRECTIONS.length];
@@ -65,8 +52,7 @@
   const isRival = (player, candidate) => candidate && candidate !== player && !candidate.eliminated;
   const seedRandom = seed => Array.from(String(seed ?? 0)).reduce((hash, char) =>
     Math.imul(hash ^ char.codePointAt(0), 16777619), 2166136261) >>> 0;
-  const speedPercentAt = (match, at) => Math.min(RULES.maxSpeedPercent, Math.max(0, Math.floor((at - match.startAt) / RULES.speedStepMs)));
-  const travelAt = (match, kind, at, boost = 0) => Math.round(THREATS[kind].travelMs * 100 / (100 + speedPercentAt(match, at) + boost));
+  const travelFor = (kind, player) => Math.round(ENEMY_TRAVEL[kind] * 100 / (100 + player.upgrades.attack_speed));
 
   function random(match, key) {
     match[key] = (Math.imul(match[key], 1664525) + 1013904223) >>> 0;
@@ -91,9 +77,6 @@
       startAt,
       seed,
       guardGraceMs: compensation(guardGraceMs),
-      waveIndex: 0,
-      waveRandom: randomSeed,
-      previousWaveDir: null,
       offerIndex: 0,
       offerRandom: randomSeed ^ 0x9e3779b9,
       mutationRandom: randomSeed ^ 0x85ebca6b,
@@ -107,7 +90,6 @@
         vulnerability: 0,
         energy: RULES.energyStart,
         streak: 0,
-        combo: 0,
         eliminated: false,
         targetId: players[(index + 1) % players.length],
         offer: null,
@@ -158,7 +140,6 @@
   function eliminate(match, players, at, reason) {
     for (const player of players) {
       player.eliminated = true;
-      player.combo = 0;
       player.targetId = null;
       player.offer = null;
       if (match.mode === 'clash') event(match, 'eliminate', at, { playerId: player.id, reason });
@@ -193,34 +174,8 @@
     return attack;
   }
 
-  const waveImpactAt = (match, index) => match.startAt + RULES.waveDelayMs + RULES.travelMs + index * RULES.waveIntervalMs;
-  const waveKind = index => WAVE_ORDER[index % WAVE_ORDER.length];
-
-  function waveLaunchAt(match) {
-    const impactAt = waveImpactAt(match, match.waveIndex);
-    const kind = waveKind(match.waveIndex);
-    let launchAt = impactAt - THREATS[kind].travelMs;
-    // Keep shared impact slots fixed while faster waves launch a little later.
-    for (;;) {
-      const adjusted = impactAt - travelAt(match, kind, launchAt);
-      if (adjusted === launchAt) return launchAt;
-      launchAt = adjusted;
-    }
-  }
-
-  function launchWave(match, at) {
-    const index = match.waveIndex++;
-    const kind = waveKind(index);
-    const dirs = DIRECTIONS.filter(dir => dir !== match.previousWaveDir);
-    const dir = dirs[Math.floor(random(match, 'waveRandom') * dirs.length)];
-    match.previousWaveDir = dir;
-    const impactAt = waveImpactAt(match, index);
-    for (const player of match.players) {
-      if (!player.eliminated) launch(match, null, player.id, dir, at, impactAt, kind, 'wave');
-    }
-  }
-
   const nextOfferAt = match => match.startAt + RULES.firstUpgradeMs + match.offerIndex * RULES.upgradeIntervalMs;
+  const canReceiveOffer = player => !player.eliminated && !player.offer;
 
   function offerUpgrades(match, at) {
     const id = `offer-${++match.offerIndex}`;
@@ -229,27 +184,13 @@
       const [[kind, { min, max }]] = options.splice(Math.floor(random(match, 'offerRandom') * options.length), 1);
       return { id: kind, kind, value: min + Math.floor(random(match, 'offerRandom') * (max - min + 1)) };
     });
-    const eligible = match.players.filter(player => !player.eliminated && !player.offer);
-    for (const player of eligible) player.offer = { id, choices };
-    if (eligible.length) event(match, 'upgrade_offer', at, { offerId: id });
+    for (const player of match.players.filter(canReceiveOffer)) player.offer = { id, choices };
+    event(match, 'upgrade_offer', at, { offerId: id });
   }
 
-  function reserveClashArrival(match, playerId, earliest) {
-    let impactAt = earliest;
-    const gap = RULES.arrivalGapMs;
-    const firstWave = waveImpactAt(match, 0);
-    const incoming = match.attacks.filter(attack => attack.to === playerId);
-    // Reserve the neutral schedule before filling the gaps with player attacks.
-    for (;;) {
-      const nearestWave = firstWave + Math.max(0, Math.round((impactAt - firstWave) / RULES.waveIntervalMs)) * RULES.waveIntervalMs;
-      if (Math.abs(nearestWave - impactAt) < gap) {
-        impactAt = nearestWave + gap;
-        continue;
-      }
-      const conflict = incoming.find(attack => Math.abs(attack.impactAt - impactAt) < gap);
-      if (!conflict) return impactAt;
-      impactAt = conflict.impactAt + gap;
-    }
+  function reserveArrival(player, earliest) {
+    player.lastArrivalAt = Math.max(earliest, player.lastArrivalAt + RULES.arrivalGapMs);
+    return player.lastArrivalAt;
   }
 
   // The extra millisecond makes the original +/-360ms window inclusive for
@@ -273,16 +214,14 @@
     // Resolve chronologically even after a delayed tick. All hits with the
     // same settlement time form one batch before eliminating anyone.
     while (match.status === 'running') {
-      const waveAt = match.mode === 'clash' ? waveLaunchAt(match) : Infinity;
-      const offerAt = match.mode === 'clash' ? nextOfferAt(match) : Infinity;
+      const offerAt = match.mode === 'clash' && match.players.some(canReceiveOffer) ? nextOfferAt(match) : Infinity;
       let nextHitAt = Infinity;
       for (const attack of match.attacks) nextHitAt = Math.min(nextHitAt, settlesAt(match, attack));
-      const nextAt = Math.min(waveAt, offerAt, nextHitAt);
+      const nextAt = Math.min(offerAt, nextHitAt);
       if (nextAt > target) break;
       rechargeTo(match, nextAt);
       if (nextAt < nextHitAt) {
-        if (offerAt === nextAt) offerUpgrades(match, nextAt);
-        else launchWave(match, nextAt);
+        offerUpgrades(match, nextAt);
         continue;
       }
       const due = match.attacks.filter(attack => settlesAt(match, attack) === nextAt);
@@ -290,11 +229,10 @@
       for (const attack of due) {
         const attacker = findPlayer(match, attack.from);
         const defender = findPlayer(match, attack.to);
-        const scoresStreak = attacker && attack.kind !== 'echo';
-        const damage = scoresStreak ? Math.min(RULES.damageMax, RULES.damageBase + attacker.streak * RULES.damageStep) : THREATS[attack.kind].damage;
+        const scoresStreak = attack.kind !== 'echo';
+        const damage = scoresStreak ? Math.min(RULES.damageMax, RULES.damageBase + attacker.streak * RULES.damageStep) : ECHO_DAMAGE;
         if (scoresStreak) attacker.streak += 1;
         defender.vulnerability = Math.min(RULES.vulnerabilityMax, defender.vulnerability + damage);
-        defender.combo = 0;
         event(match, 'hit', nextAt, {
           playerId: defender.id,
           from: attack.from,
@@ -309,7 +247,14 @@
       if (defeated.length) eliminate(match, defeated, nextAt, 'vulnerability');
     }
     if (match.status === 'finished') match.now = target;
-    else rechargeTo(match, target);
+    else {
+      if (match.mode === 'clash') {
+        // Players who still have an offer skip expired slots without a reroll.
+        const elapsed = target - match.startAt - RULES.firstUpgradeMs;
+        match.offerIndex = Math.max(match.offerIndex, Math.floor(elapsed / RULES.upgradeIntervalMs) + 1);
+      }
+      rechargeTo(match, target);
+    }
     return match;
   }
 
@@ -335,32 +280,13 @@
     return { ok: true, kind, value };
   }
 
-  function maybeMutate(match, player, primary, at) {
+  function maybeMutate(match, player, opponent, primary, at) {
     const chance = player.upgrades.mutation;
     if (!chance || !hasRoomForAttack(match, primary.to) || random(match, 'mutationRandom') * 100 >= chance) return null;
     const kind = MUTATIONS[Math.floor(random(match, 'mutationRandom') * MUTATIONS.length)];
-    const travel = travelAt(match, kind, at, player.upgrades.attack_speed);
-    const earliest = Math.max(primary.impactAt + RULES.arrivalGapMs, at + travel);
-    const impactAt = reserveClashArrival(match, primary.to, earliest);
+    const travel = travelFor(kind, player);
+    const impactAt = reserveArrival(opponent, at + travel);
     return launch(match, player.id, primary.to, primary.dir, at, impactAt, kind, 'mutation', impactAt - travel);
-  }
-
-  function applyCombo(match, player, guarded, at, perfect) {
-    player.combo += perfect ? 2 : 1;
-    if (player.combo < RULES.comboThreshold) return;
-    player.combo -= RULES.comboThreshold;
-    const incoming = match.attacks.filter(attack => attack.from !== null && attack.to === player.id && attack.impactAt >= at);
-    incoming.sort((a, b) => a.impactAt - b.impactAt || a.attackId - b.attackId);
-    const canceled = incoming[0];
-    if (canceled) {
-      match.attacks = match.attacks.filter(attack => attack !== canceled);
-      event(match, 'cancel', at, { playerId: player.id, from: canceled.from, attackId: canceled.attackId, dir: canceled.dir, kind: canceled.kind });
-    } else if (hasRoomForAttack(match, player.targetId)) {
-      const kind = guarded.kind === 'echo' ? 'virus' : guarded.kind;
-      const travel = travelAt(match, kind, at, player.upgrades.attack_speed);
-      const impactAt = reserveClashArrival(match, player.targetId, at + travel);
-      launch(match, player.id, player.targetId, guarded.dir, at, impactAt, kind, 'counter', impactAt - travel);
-    }
   }
 
   function input(match, playerId, command, now, options) {
@@ -398,16 +324,13 @@
       const override = findPlayer(match, command.targetId);
       const opponent = isRival(player, override) ? override : findPlayer(match, player.targetId);
       if (!hasRoomForAttack(match, opponent.id)) return { ok: false, reason: 'queue_full' };
-      const travel = match.mode === 'clash' ? travelAt(match, 'virus', at, player.upgrades.attack_speed) : RULES.travelMs;
-      const earliest = at + travel;
-      const impactAt = match.mode === 'clash' ? reserveClashArrival(match, opponent.id, earliest) :
-        Math.max(earliest, opponent.lastArrivalAt + RULES.arrivalGapMs);
+      const travel = travelFor('virus', player);
+      const impactAt = reserveArrival(opponent, at + travel);
       player.energy = Math.max(0, player.energy - RULES.attackCost);
       player.lastAttackAt = at;
-      opponent.lastArrivalAt = impactAt;
       const launchedAt = match.mode === 'clash' ? impactAt - travel : at;
       const attack = launch(match, playerId, opponent.id, command.dir, at, impactAt, 'virus', 'manual', launchedAt);
-      const mutation = match.mode === 'clash' ? maybeMutate(match, player, attack, at) : null;
+      const mutation = match.mode === 'clash' ? maybeMutate(match, player, opponent, attack, at) : null;
       if (mutation) return { ok: true, attackId: attack.attackId, impactAt, mutationAttackId: mutation.attackId };
       return { ok: true, attackId: attack.attackId, impactAt };
     }
@@ -426,24 +349,19 @@
     candidates.sort((a, b) => a.impactAt - b.impactAt || a.attackId - b.attackId);
     const attack = candidates[0];
     if (!attack) {
-      player.combo = 0;
       event(match, 'miss', at, { playerId, dir: command.dir });
       return { ok: true, guarded: false, perfect: false };
     }
     const perfect = Math.abs(attack.impactAt - guardAt) <= RULES.perfectWindowMs;
     match.attacks = match.attacks.filter(candidate => candidate.attackId !== attack.attackId);
     const attacker = findPlayer(match, attack.from);
-    if (attacker) attacker.streak = 0;
+    attacker.streak = 0;
     if (perfect) player.energy = Math.min(RULES.energyMax, player.energy + RULES.perfectEnergy * (1 + player.upgrades.perfect_energy / 100));
     event(match, 'guard', at, { playerId, attackId: attack.attackId, from: attack.from, dir: command.dir, kind: attack.kind, perfect });
-    if (match.mode === 'clash') {
-      if (attack.kind === 'trojan') {
-        const travel = travelAt(match, 'echo', at, attacker?.upgrades.attack_speed);
-        const earliest = Math.max(at + travel, attack.impactAt + RULES.arrivalGapMs);
-        const impactAt = reserveClashArrival(match, playerId, earliest);
-        launch(match, attack.from, playerId, opposite(attack.dir), at, impactAt, 'echo', attack.source, impactAt - travel);
-      }
-      applyCombo(match, player, attack, at, perfect);
+    if (attack.kind === 'trojan') {
+      const travel = travelFor('echo', attacker);
+      const impactAt = reserveArrival(player, at + travel);
+      launch(match, attack.from, playerId, opposite(attack.dir), at, impactAt, 'echo', attack.source, impactAt - travel);
     }
     return { ok: true, guarded: true, perfect, attackId: attack.attackId };
   }
@@ -470,14 +388,12 @@
       winnerId: match.winnerId,
       finishedAt: match.finishedAt,
       finishReason: match.finishReason,
-      ...(isClash && { speedPercent: speedPercentAt(match, match.finishedAt ?? match.now) }),
       rules: Object.assign({}, RULES),
       players: match.players.map(player => ({
         id: player.id,
         vulnerability: player.vulnerability,
         energy: player.energy,
         streak: player.streak,
-        combo: player.combo,
         eliminated: player.eliminated,
         targetId: player.targetId,
         ...(isClash && {

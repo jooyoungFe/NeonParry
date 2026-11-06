@@ -35,8 +35,8 @@
       'duel-settings-label':['Connection settings','접속 설정'],'duel-name-label':['Name','이름'],'duel-server-url-label':['Server address','서버 주소'],
       'duel-online-note':['Random 1v1 or a room for up to 8.','랜덤 1대1 또는 최대 8인 친구방.'],
       'duel-rules-title':['Rules','대전 규칙'],
-      'duel-rules-text':['Pick one of three random upgrades when they appear. Parry for combo: at 3, cancel an incoming shot or send a counter. Tap an opponent to target them.','경기 중 무작위 업그레이드 3개 중 하나를 고르세요. 패링 콤보 3칸을 채우면 상대 공격을 지우거나 반격합니다. 상대 화면을 눌러 공격 대상을 바꿀 수 있어요.'],
-      'duel-threats-text':['Trojan comes back once. Worms arrive fast. Parry Phishing on the side that lights up.','트로이는 한 번 더 돌아오고, 웜은 빠르게 들어옵니다. 피싱은 밝아지는 쪽을 패링하세요.'],
+      'duel-rules-text':['Directions to parry. Shift + direction to attack. In a group, tap a rival to target them.','방향키로 패링, Shift + 방향키로 공격합니다. 여러 명이면 상대 화면을 눌러 공격 대상을 바꿀 수 있어요.'],
+      'duel-threats-text':['Pick one of three optional upgrades mid-match. Extra threats can only appear when a player with the extra-virus upgrade attacks.','경기 중 업그레이드 3개 중 하나를 고를 수 있어요. 추가 적은 해당 업그레이드를 고른 플레이어가 공격할 때만 나옵니다.'],
       'duel-matching-label':['Finding opponent…','상대를 찾고 있습니다…'],
       'duel-matching-note':['The duel starts when another player joins matchmaking. You can cancel at any time.','다른 플레이어가 랜덤 매칭에 들어오면 시작합니다. 언제든 취소할 수 있습니다.'],
       'duel-cancel':['Cancel','취소'],'duel-room-label':['Room code · tap to copy','방 코드 · 눌러서 복사'],
@@ -179,17 +179,12 @@
   }
   function runCpu(at){
     if(battle.status!=='running')return;
-    const offer=battle.players.find(player=>player.id==='cpu')?.offer;
-    if(offer){
-      const choice=offer.choices[Math.floor(Math.random()*offer.choices.length)];
-      Engine.input(battle,'cpu',{type:'upgrade',offerId:offer.id,choiceId:choice.id},at);
-    }
     const level=$('duel-cpu-level').value;
     const config=level==='rookie'?{guard:.35,jitter:210,pace:950}:level==='expert'?{guard:.9,jitter:100,pace:550}:{guard:.7,jitter:170,pace:700};
     for(const attack of battle.attacks){
       if(attack.to!=='cpu'||cpuPlans.has(attack.attackId))continue;
-      const attempt=attack.impactAt+(Math.random()*2-1)*config.jitter;
-      cpuPlans.set(attack.attackId,Math.random()<config.guard?Math.max(attack.revealAt??-Infinity,attempt):Infinity);
+      const attempt=Math.random()<config.guard?attack.impactAt+(Math.random()*2-1)*config.jitter:Infinity;
+      cpuPlans.set(attack.attackId,Math.max(attack.revealAt??-Infinity,attempt));
     }
     for(const[id,atGuard]of cpuPlans){const attack=battle.attacks.find(a=>a.attackId===id);if(!attack){cpuPlans.delete(id);continue;}if(at>=atGuard){Engine.input(battle,'cpu',{type:'guard',dir:attack.dir},at);cpuPlans.set(id,Infinity);}}
     if(at>=nextCpuAttack){const result=Engine.input(battle,'cpu',{type:'attack',dir:dirs[Math.floor(Math.random()*4)]},at);nextCpuAttack=at+(result.ok?config.pace+Math.random()*350:100);}

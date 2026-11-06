@@ -78,7 +78,7 @@ test('vulnerability ends CPU practice and retry resets both arenas for a fresh c
   const game=createDuel();startPractice(game);advance(game,2200);
   key(game,'ArrowRight',{shiftKey:true});advance(game,11800);
   assert.equal(game.element('vulnerability-value').textContent,'100%');assert.equal(game.element('overlay-title').textContent,'Core disconnected');assert.equal(game.element('action').textContent,'Retry');assert.equal(game.element('overlay').hidden,false);
-  assert.ok(parseInt(game.element('duel-opponent-vulnerability').textContent,10)>=15,'the CPU takes damage from waves as well as the manual shot');
+  assert.equal(game.element('duel-opponent-vulnerability').textContent,'15%','only the manual shot damages the CPU');
   game.element('action').click();frame(game,0);
   assert.equal(game.element('overlay-title').textContent,'3');assert.equal(game.element('vulnerability-value').textContent,'0%');assert.equal(game.element('best').textContent,'0%');assert.equal(game.element('skill-meter').getAttribute('aria-valuenow'),'2.00');assert.equal(game.element('enemies').children.length,0);
   assert.equal(game.element('duel-opponent').hidden,false);

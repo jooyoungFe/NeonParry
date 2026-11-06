@@ -47,10 +47,11 @@
   function bestLabel() { return $('best').parentNode.querySelector('small'); }
 
   function attackKind(kind) { return Object.prototype.hasOwnProperty.call(TYPES, kind) ? kind : 'virus'; }
-  function createAttackActor(attack, clash) {
+  function createAttackActor(attack, upgradesEnabled) {
     const kind = attackKind(attack.kind);
-    // A queued attack in classic Duel retains the original fixed travel time.
-    const travel = clash && Number.isFinite(attack.launchedAt) && attack.impactAt > attack.launchedAt
+    // Legacy snapshots report command time. Upgrade-enabled rooms report when
+    // the attack appears so queued shots retain their full travel speed.
+    const travel = upgradesEnabled && Number.isFinite(attack.launchedAt) && attack.impactAt > attack.launchedAt
       ? attack.impactAt - attack.launchedAt : TYPES[kind].travel;
     const deceptive = kind === 'phishing' && arrow[attack.decoyDir] && Number.isFinite(attack.revealAt);
     return createEnemyActor(deceptive ? attack.decoyDir : attack.dir, attack.impactAt - travel, travel, kind, {
@@ -68,6 +69,7 @@
     const radius = actor ? enemyPosition(actor, event.at).radius : TARGET_RADIUS;
     shatterEnemy({ dir: event.dir, kind: actor?.kind || attackKind(event.kind), radius }, event.perfect, schedule);
   }
+  function manualAttack(event) { return event.type === 'attack' && (!event.source || event.source === 'manual'); }
 
   function mountRivalScene(arena, name, value, tile) {
     const art = artTemplate.cloneNode(true);
@@ -97,7 +99,7 @@
     reset();
     arena.replaceChildren(art);
     return {
-      prepare(attacks, player, time, label, selected, targeting, clash) {
+      prepare(attacks, player, time, label, selected, targeting, upgradesEnabled) {
         at = time;
         if (name.textContent !== label) name.textContent = label;
         const percent = player.eliminated ? tr('Out', '탈락') : player.vulnerability + '%';
@@ -118,7 +120,7 @@
           pending.add(attack.attackId);
           let actor = threats.get(attack.attackId);
           if (!actor) {
-            actor = createAttackActor(attack, clash);
+            actor = createAttackActor(attack, upgradesEnabled);
             node('enemies').append(actor.node);
             threats.set(attack.attackId, actor);
           }
@@ -130,9 +132,7 @@
         if (event.type === 'hit') {
           hitUntil = at + 280;
           glitchAt(240, 240, 39, 'damage', schedule);
-        } else if (event.type === 'cancel') {
-          breakAttack(threats.get(event.attackId), event, schedule);
-        } else if (event.type === 'guard' || (event.type === 'attack' && !['counter', 'mutation'].includes(event.source))) {
+        } else if (event.type === 'guard' || manualAttack(event)) {
           if (event.type === 'guard') breakAttack(threats.get(event.attackId), event, schedule);
           paintStrikePose(event.dir, event.perfect, node, schedule);
           addEffect(event.dir, event.perfect ? 'perfect' : 'guard', schedule);
@@ -241,7 +241,6 @@
     };
     $('duel-self-name').textContent = tr('You', '나');
     $('duel-opponent-name').textContent = tr('Opponent', '상대');
-    $('duel-combo-label').textContent = tr('Combo', '콤보');
     artTemplate = $('arena').querySelector('svg').cloneNode(true);
     const opponents = [...config.names.keys()].filter(id => id !== options.selfId);
     buildRivals(opponents.length ? opponents : [null]);
@@ -253,10 +252,12 @@
     if (!saved) return;
     silenceSound();
     clearRivals();
+    $('game-shell').removeAttribute('data-duel-group');
+    $('game-shell').removeAttribute('data-duel-upgrades');
     $('duel-opponent').hidden = true;
     $('duel-opponent').setAttribute('aria-labelledby', 'duel-opponent-name');
     $('duel-single-opponent').hidden = false; $('duel-opponent-group').hidden = true;
-    $('duel-combo').hidden = true; $('duel-latency').hidden = true;
+    $('duel-latency').hidden = true;
     $('duel-speed').hidden = true;
     renderUpgrade(null);
     config = null; artTemplate = null; pendingTarget = null; prediction = null; eliminated = false;
@@ -365,7 +366,10 @@
     const mine = state.players.find(player => player.id === ownId);
     const opponents = state.players.filter(player => player.id !== ownId);
     if (!mine || !opponents.length) return;
-    const clash = state.mode === 'clash';
+    const upgradesEnabled = state.mode === 'clash';
+    const shell = $('game-shell');
+    if (upgradesEnabled && shell.getAttribute('data-duel-upgrades') === null) shell.setAttribute('data-duel-upgrades', '');
+    else if (!upgradesEnabled && shell.getAttribute('data-duel-upgrades') !== null) shell.removeAttribute('data-duel-upgrades');
     eliminated = !!mine.eliminated;
     const selfName = eliminated && state.status !== 'finished' ? tr('Spectating', '관전 중') : tr('You', '나');
     if ($('duel-self-name').textContent !== selfName) $('duel-self-name').textContent = selfName;
@@ -383,13 +387,13 @@
       player.name || config.names.get(player.id) || tr('Opponent', '상대') + (opponents.length > 1 ? ' ' + (i + 1) : '');
     const rivalPending = opponents.map((player, i) => {
       const scene = rivals.get(player.id);
-      return [scene, scene.prepare(state.attacks, player, at, opponentLabel(player, i), player.id === targetId && !player.eliminated, targeting, clash)];
+      return [scene, scene.prepare(state.attacks, player, at, opponentLabel(player, i), player.id === targetId && !player.eliminated, targeting, upgradesEnabled)];
     });
     const incoming = state.attacks.filter(attack => attack.to === ownId);
     for (const attack of incoming) {
       let actor = actors.get(attack.attackId);
       if (!actor) {
-        actor = createAttackActor(attack, clash);
+        actor = createAttackActor(attack, upgradesEnabled);
         $('enemies').append(actor.node);
         enemies.push(actor);
         actors.set(attack.attackId, actor);
@@ -409,29 +413,21 @@
         if (confirmsPrediction) prediction = null;
         addEffect(event.dir, event.perfect ? 'perfect' : 'guard');
         shakeCamera(event.perfect ? 2.4 : 1.4); playSound(event.perfect ? 'perfect' : 'guard'); guards++;
-        if (clash) setMessage(event.perfect ? tr('Perfect', '정밀 패링') : tr('Guarded', '방어'));
-        else setMessage(event.perfect ? tr('Perfect / +½ attack energy', '정밀 패링 / 공격 에너지 +½') :
-          tr('Guarded / rival pressure reset', '방어 / 상대 연속 적중 초기화'));
-      } else if (event.type === 'attack' && own) {
-        if (event.source === 'counter') {
-          if (event.kind !== 'echo') setMessage(tr('Combo / counter sent', '콤보 / 반격'));
-        } else if (event.source === 'mutation') {
-          setMessage(tr('Extra virus', '추가 바이러스'));
-        }
-        else {
-          strikePose(event.dir, false); addEffect(event.dir, 'guard'); playSound('guard');
-          setMessage(tr('Attack sent ', '공격 전송 ') + arrow[event.dir]);
-        }
-      } else if (event.type === 'cancel' && own) {
-        breakAttack(actors.get(event.attackId), event);
-        setMessage(tr('Combo / attack canceled', '콤보 / 공격 차단'));
+        const perfectText = mine.upgrades?.perfect_energy > 0
+          ? tr('Perfect', '정밀 패링') : tr('Perfect / +½ attack energy', '정밀 패링 / 공격 에너지 +½');
+        setMessage(event.perfect ? perfectText : tr('Guarded / rival pressure reset', '방어 / 상대 연속 적중 초기화'));
+      } else if (own && manualAttack(event)) {
+        strikePose(event.dir, false); addEffect(event.dir, 'guard'); playSound('guard');
+        setMessage(tr('Attack sent ', '공격 전송 ') + arrow[event.dir]);
+      } else if (event.type === 'attack' && own && event.source === 'mutation') {
+        setMessage(tr('Extra virus', '추가 바이러스'));
       } else if (event.type === 'upgrade' && own) {
         setMessage(tr('Upgrade · ', '업그레이드 · ') + upgradeText(event).join(' '));
       } else if (event.type === 'miss' && own) {
         addEffect(event.dir, 'miss'); playSound('miss'); setMessage(tr('Empty guard', '헛방어'), 'var(--pink)');
       } else if (event.type === 'hit') {
         if (own) { damageFeedback(true); coreFlashUntil = clock + 300; playSound('damage'); }
-        if (!clash || own || event.from === ownId) {
+        if (own || event.from === ownId) {
           setMessage((own ? tr('Core hit / +', '코어 피격 / +') : tr('Attack hit / +', '공격 적중 / +')) + event.damage + '%p', 'var(--pink)');
         }
       } else if (event.type === 'finish') playSound(state.winnerId === ownId ? 'perfect' : 'gameover');
@@ -446,17 +442,15 @@
     $('vulnerability').setAttribute('aria-valuetext', mine.vulnerability + '%');
     $('score').textContent = guards; $('score-label').textContent = tr('Defenses', '방어');
     bestLabel().textContent = opponentLabel(opponents[0], 0); $('best').textContent = opponents[0].vulnerability + '%';
-    $('run-label').textContent = (clash ? tr('Clash', '난투') : tr('Duel', '듀얼')) + (options.connection ? ' · ' + options.connection : '');
-    $('duel-combo').hidden = !clash;
-    if (clash) $('duel-combo-value').textContent = (mine.combo ?? 0) + ' / ' + (state.rules?.comboThreshold ?? 3);
-    const speed = (state.speedPercent ?? 0) + (mine.upgrades?.attack_speed ?? 0);
+    $('run-label').textContent = tr('Duel', '듀얼') + (options.connection ? ' · ' + options.connection : '');
+    const speed = mine.upgrades?.attack_speed ?? 0;
     const speedReadout = $('duel-speed');
-    speedReadout.hidden = !clash || speed <= 0;
+    speedReadout.hidden = speed <= 0;
     if (!speedReadout.hidden) {
       const speedText = tr('Shot speed +', '공격 속도 +') + speed + '%';
       if (speedReadout.textContent !== speedText) speedReadout.textContent = speedText;
     }
-    renderUpgrade(clash && state.status === 'running' && !eliminated ? mine.offer : null);
+    renderUpgrade(upgradesEnabled && state.status === 'running' && !eliminated ? mine.offer : null);
     const energy = Math.max(0, Math.min(3, options.energy === undefined ? mine.energy : options.energy));
     $('skill-fill').style.width = energy / 3 * 100 + '%';
     $('skill-meter').setAttribute('aria-valuenow', energy.toFixed(2));

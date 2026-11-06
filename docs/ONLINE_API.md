@@ -84,7 +84,7 @@ data: {"room":{...},"battle":{...},"serverTime":1800000004000}
 
 ```
 
-`battle`에는 `now/startAt/status`, `winnerId`, `finishedAt`, `finishReason`, `rules`, `players`, `attacks`, 최근 `events`가 있습니다. 플레이어 상태는 `{id,vulnerability,energy,streak}`, 공격은 `{attackId,from,to,dir,launchedAt,impactAt,state}`입니다. `clash`에는 플레이어의 `combo`, `eliminated`, `targetId`, `offer`, `upgrades`와 공격의 `kind`, `source`가 추가됩니다. `status`는 `countdown/running/finished`, `finishReason`은 `vulnerability/draw/forfeit`이며 무승부의 `winnerId`는 null입니다. 스트림 응답에도 참가 토큰은 포함하지 않습니다.
+`battle`에는 `now/startAt/status`, `winnerId`, `finishedAt`, `finishReason`, `rules`, `players`, `attacks`, 최근 `events`가 있습니다. 플레이어 상태는 `{id,vulnerability,energy,streak}`, 공격은 `{attackId,from,to,dir,launchedAt,impactAt,state}`입니다. `clash`에는 플레이어의 `eliminated`, `targetId`, `offer`, `upgrades`와 공격의 `kind`, `source`가 추가됩니다. `status`는 `countdown/running/finished`, `finishReason`은 `vulnerability/draw/forfeit`이며 무승부의 `winnerId`는 null입니다. 스트림 응답에도 참가 토큰은 포함하지 않습니다.
 
 재연결은 같은 토큰으로 스트림을 다시 엽니다. 플레이어당 최대 두 스트림을 허용하고, 마지막 연결 종료 후 15초 안에 복귀하지 않으면 기권합니다. 한 번 조회하는 `/battle/state`는 지속 연결로 취급하지 않습니다. 정상 플레이 중에는 스트림을 유지하세요.
 

@@ -23,10 +23,15 @@
   align-items:start;
   gap:clamp(10px,1.5vw,20px)
 }
-/* Leave space for clash offers without resizing the lanes when one arrives. */
-#game-shell[data-run-mode="duel"] .layout:has(#duel-combo:not([hidden])){
-  --duel-arena-limit:clamp(150px,calc(100dvh - 265px),520px);
-  row-gap:8px
+/* Reserve space for upgrades below the arenas without resizing them mid-match. */
+#game-shell[data-run-mode="duel"][data-duel-upgrades] .layout{row-gap:8px}
+#game-shell[data-run-mode="duel"][data-duel-upgrades][data-duel-group] .layout{
+  --duel-arena-limit:clamp(150px,calc(100dvh - 265px),520px)
+}
+@media(max-height:690px){
+  #game-shell[data-run-mode="duel"][data-duel-upgrades] .layout{
+    --duel-arena-limit:clamp(150px,calc(100dvh - 265px),520px)
+  }
 }
 #game-shell[data-run-mode="duel"] .console,
 #duel-opponent{width:100%;min-width:0}
@@ -73,7 +78,6 @@
 #duel-opponent .arena[data-eliminated="true"],
 #arena[data-duel-eliminated="true"] > svg{opacity:.45}
 #duel-latency,#duel-speed{margin:2px 0 0;color:var(--muted);font:11px monospace}
-#duel-combo-value{color:var(--green)}
 #duel-upgrades{
   grid-column:1/3;
   grid-row:2;
