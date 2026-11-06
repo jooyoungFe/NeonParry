@@ -443,9 +443,9 @@
     $('score').textContent = guards; $('score-label').textContent = tr('Defenses', '방어');
     bestLabel().textContent = opponentLabel(opponents[0], 0); $('best').textContent = opponents[0].vulnerability + '%';
     $('run-label').textContent = tr('Duel', '듀얼') + (options.connection ? ' · ' + options.connection : '');
-    const speed = mine.upgrades?.attack_speed ?? 0;
+    const speed = (state.speedPercent ?? 0) + (mine.upgrades?.attack_speed ?? 0);
     const speedReadout = $('duel-speed');
-    speedReadout.hidden = speed <= 0;
+    speedReadout.hidden = !Number.isFinite(state.speedPercent) && speed <= 0;
     if (!speedReadout.hidden) {
       const speedText = tr('Shot speed +', '공격 속도 +') + speed + '%';
       if (speedReadout.textContent !== speedText) speedReadout.textContent = speedText;

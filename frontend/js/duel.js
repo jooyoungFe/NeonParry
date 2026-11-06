@@ -36,7 +36,7 @@
       'duel-online-note':['Random 1v1 or a room for up to 8.','랜덤 1대1 또는 최대 8인 친구방.'],
       'duel-rules-title':['Rules','대전 규칙'],
       'duel-rules-text':['Directions to parry. Shift + direction to attack. In a group, tap a rival to target them.','방향키로 패링, Shift + 방향키로 공격합니다. 여러 명이면 상대 화면을 눌러 공격 대상을 바꿀 수 있어요.'],
-      'duel-threats-text':['Pick one of three optional upgrades mid-match. Extra threats can only appear when a player with the extra-virus upgrade attacks.','경기 중 업그레이드 3개 중 하나를 고를 수 있어요. 추가 적은 해당 업그레이드를 고른 플레이어가 공격할 때만 나옵니다.'],
+      'duel-threats-text':['The first upgrade appears at 4 seconds, then every 7 seconds. Shots and energy recharge speed up during the duel.','첫 능력은 4초 뒤, 이후 7초마다 나옵니다. 대전이 길어질수록 공격과 에너지 충전이 빨라져요.'],
       'duel-matching-label':['Finding opponent…','상대를 찾고 있습니다…'],
       'duel-matching-note':['The duel starts when another player joins matchmaking. You can cancel at any time.','다른 플레이어가 랜덤 매칭에 들어오면 시작합니다. 언제든 취소할 수 있습니다.'],
       'duel-cancel':['Cancel','취소'],'duel-room-label':['Room code · tap to copy','방 코드 · 눌러서 복사'],
@@ -195,9 +195,14 @@
   function render(state,at){
     const me=state.players.find(p=>p.id===ownId()),rival=state.players.find(p=>p.id!==ownId());if(!me||!rival)return;
     const opponentName=session==='practice'?'CPU':room?.players.find(p=>p.id===rival.id)?.name||tr('Opponent','상대');
-    const recharge=1+(me.upgrades?.recharge||0)/100;
-    const elapsed=state.status==='running'&&!me.eliminated?Math.max(0,at-state.now):0;
-    const energy=Math.min(Engine.RULES.energyMax,me.energy+elapsed*recharge/Engine.RULES.energyRechargeMs);
+    let energy=me.energy;
+    if(state.status==='running'&&!me.eliminated&&at>state.now){
+      const personalRecharge=1+(me.upgrades?.recharge||0)/100;
+      const gained=Number.isFinite(state.rechargeRate)
+        ?Engine.baseEnergyGain(state,state.now,at)
+        :(at-state.now)/Engine.RULES.energyRechargeMs;
+      energy=Math.min(Engine.RULES.energyMax,energy+gained*personalRecharge);
+    }
     const connection=session==='practice'?tr('CPU practice','CPU 연습'):canSend()||state.status==='finished'?'':tr('Reconnecting','재연결 중');
     View.render(state,ownId(),at,{opponentName,energy,connection,stance,online:session==='online'});
     $('action').textContent=state.status==='finished'?session==='practice'?tr('Retry','재도전'):randomDuel?tr('Find next opponent','다음 상대 찾기'):tr('Rematch','재대전'):tr('Leave duel','대전 나가기');

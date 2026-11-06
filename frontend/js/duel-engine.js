@@ -29,8 +29,18 @@
     maxEvents: 32,
     clashMaxPlayers: 8,
     clashMaxEvents: 96,
-    firstUpgradeMs: 8000,
-    upgradeIntervalMs: 13000,
+    paceStepMs: 4000,
+    paceEarlyDurationMs: 16000,
+    paceLateStepMs: 12000,
+    paceStepPercent: 15,
+    paceMaxPercent: 150,
+    rechargeStartRate: 1.25,
+    rechargeStepRate: 0.25,
+    rechargeStepMs: 20000,
+    rechargeMaxRate: 2.5,
+    minFlightMs: 550,
+    firstUpgradeMs: 4000,
+    upgradeIntervalMs: 7000,
     maxGuardCompensationMs: 120
   });
   const DIRECTIONS = Object.freeze(['up', 'right', 'down', 'left']);
@@ -52,7 +62,42 @@
   const isRival = (player, candidate) => candidate && candidate !== player && !candidate.eliminated;
   const seedRandom = seed => Array.from(String(seed ?? 0)).reduce((hash, char) =>
     Math.imul(hash ^ char.codePointAt(0), 16777619), 2166136261) >>> 0;
-  const travelFor = (kind, player) => Math.round(ENEMY_TRAVEL[kind] * 100 / (100 + player.upgrades.attack_speed));
+  function speedPercentAt(match, at) {
+    if (match.mode !== 'clash' || at < match.startAt) return 0;
+    const elapsed = at - match.startAt;
+    const earlySteps = 1 + Math.floor(Math.min(elapsed, RULES.paceEarlyDurationMs) / RULES.paceStepMs);
+    const lateSteps = Math.floor(Math.max(0, elapsed - RULES.paceEarlyDurationMs) / RULES.paceLateStepMs);
+    return Math.min((earlySteps + lateSteps) * RULES.paceStepPercent, RULES.paceMaxPercent);
+  }
+
+  function rechargeRateAt(match, at) {
+    if (match.mode !== 'clash' || at < match.startAt) return 1;
+    let rate = RULES.rechargeStartRate;
+    for (let step = 1; rate < RULES.rechargeMaxRate && at >= match.startAt + step * RULES.rechargeStepMs; step++) {
+      rate += RULES.rechargeStepRate;
+    }
+    return rate;
+  }
+
+  function baseEnergyGain(match, from, to) {
+    let cursor = Math.max(from, match.startAt);
+    if (!(to > cursor)) return 0;
+    if (match.mode !== 'clash') return (to - cursor) / RULES.energyRechargeMs;
+    let weightedMs = 0;
+    let rate = RULES.rechargeStartRate;
+    for (let step = 1; rate < RULES.rechargeMaxRate && cursor < to; step++, rate += RULES.rechargeStepRate) {
+      const end = Math.min(to, match.startAt + step * RULES.rechargeStepMs);
+      if (end <= cursor) continue;
+      weightedMs += (end - cursor) * rate;
+      cursor = end;
+    }
+    return (weightedMs + (to - cursor) * rate) / RULES.energyRechargeMs;
+  }
+
+  function travelFor(match, kind, player, at) {
+    const speed = speedPercentAt(match, at) + player.upgrades.attack_speed;
+    return Math.max(RULES.minFlightMs, Math.round(ENEMY_TRAVEL[kind] * 100 / (100 + speed)));
+  }
 
   function random(match, key) {
     match[key] = (Math.imul(match[key], 1664525) + 1013904223) >>> 0;
@@ -117,9 +162,8 @@
   }
 
   function rechargeTo(match, time) {
-    const from = Math.max(match.now, match.startAt);
-    if (time > from && match.status !== 'finished') {
-      const recharge = (time - from) / RULES.energyRechargeMs;
+    const recharge = baseEnergyGain(match, match.now, time);
+    if (recharge > 0 && match.status !== 'finished') {
       for (const player of match.players) {
         if (!player.eliminated) player.energy = Math.min(RULES.energyMax, player.energy + recharge * (1 + player.upgrades.recharge / 100));
       }
@@ -284,7 +328,7 @@
     const chance = player.upgrades.mutation;
     if (!chance || !hasRoomForAttack(match, primary.to) || random(match, 'mutationRandom') * 100 >= chance) return null;
     const kind = MUTATIONS[Math.floor(random(match, 'mutationRandom') * MUTATIONS.length)];
-    const travel = travelFor(kind, player);
+    const travel = travelFor(match, kind, player, at);
     const impactAt = reserveArrival(opponent, at + travel);
     return launch(match, player.id, primary.to, primary.dir, at, impactAt, kind, 'mutation', impactAt - travel);
   }
@@ -324,7 +368,7 @@
       const override = findPlayer(match, command.targetId);
       const opponent = isRival(player, override) ? override : findPlayer(match, player.targetId);
       if (!hasRoomForAttack(match, opponent.id)) return { ok: false, reason: 'queue_full' };
-      const travel = travelFor('virus', player);
+      const travel = travelFor(match, 'virus', player, at);
       const impactAt = reserveArrival(opponent, at + travel);
       player.energy = Math.max(0, player.energy - RULES.attackCost);
       player.lastAttackAt = at;
@@ -359,7 +403,7 @@
     if (perfect) player.energy = Math.min(RULES.energyMax, player.energy + RULES.perfectEnergy * (1 + player.upgrades.perfect_energy / 100));
     event(match, 'guard', at, { playerId, attackId: attack.attackId, from: attack.from, dir: command.dir, kind: attack.kind, perfect });
     if (attack.kind === 'trojan') {
-      const travel = travelFor('echo', attacker);
+      const travel = travelFor(match, 'echo', attacker, at);
       const impactAt = reserveArrival(player, at + travel);
       launch(match, attack.from, playerId, opposite(attack.dir), at, impactAt, 'echo', attack.source, impactAt - travel);
     }
@@ -380,6 +424,7 @@
   function snapshot(match, now) {
     advance(match, now);
     const isClash = match.mode === 'clash';
+    const at = match.finishedAt ?? match.now;
     return {
       now: match.now,
       mode: match.mode,
@@ -388,6 +433,7 @@
       winnerId: match.winnerId,
       finishedAt: match.finishedAt,
       finishReason: match.finishReason,
+      ...(isClash && { speedPercent: speedPercentAt(match, at), rechargeRate: rechargeRateAt(match, at) }),
       rules: Object.assign({}, RULES),
       players: match.players.map(player => ({
         id: player.id,
@@ -406,5 +452,5 @@
     };
   }
 
-  return Object.freeze({ RULES, DIRECTIONS, createMatch, advance, input, forfeit, snapshot });
+  return Object.freeze({ RULES, DIRECTIONS, createMatch, advance, input, forfeit, snapshot, baseEnergyGain });
 });

@@ -257,7 +257,7 @@ test('forfeit handles countdown and running matches through the shared finish pa
 const clash = (players = ['a', 'b'], options = {}) => E.createMatch({ mode: 'clash', players, ...options });
 const fasterTravel = (base, boost) => Math.round(base * 100 / (100 + boost));
 
-test('clash supports eight players and an idle match never attacks, damages players or speeds up', () => {
+test('eight idle Clash players stay in the match indefinitely without automatic attacks', () => {
   const roster = Array.from({ length: 8 }, (_, index) => `p${index}`);
   assert.throws(() => E.createMatch({ players: roster }), /two distinct/);
   assert.throws(() => clash([...roster, 'p8']), /2–8 distinct/);
@@ -270,12 +270,15 @@ test('clash supports eight players and an idle match never attacks, damages play
   const idle = E.snapshot(m, now);
   assert.equal(idle.mode, 'clash');
   assert.equal(idle.status, 'running');
-  assert.equal(idle.speedPercent, undefined);
+  assert.equal(idle.endsAt, undefined);
+  assert.equal(idle.finishedAt, null);
+  assert.equal(idle.speedPercent, 150);
+  assert.equal(idle.rechargeRate, 2.5);
   assert.equal(idle.attacks.length, 0);
   assert.equal(idle.players.every(p => p.vulnerability === 0 && !p.eliminated), true);
   assert.equal(idle.players.every(p => p.offer.id === 'offer-1'), true);
   assert.deepEqual(idle.events.map(event => event.type), ['upgrade_offer']);
-  assert.equal(attack(m, roster[0], 'up', now).impactAt - now, E.RULES.travelMs);
+  assert.equal(attack(m, roster[0], 'up', now).impactAt, now + 880);
 });
 
 test('clash targets persist across attack overrides and retarget when a rival leaves', () => {
@@ -309,37 +312,26 @@ test('clash targets persist across attack overrides and retarget when a rival le
   assert.equal(lastEvent(m, 'eliminate').reason, 'vulnerability');
 });
 
-test('unupgraded clash preserves classic attack queue, energy, cooldowns and guard timing', () => {
-  const original = match();
-  const updated = clash();
-  for (const [send, id, dir, at] of [
-    [attack, 'a', 'up', 0],
-    [attack, 'a', 'right', 349],
-    [attack, 'a', 'right', 350],
-    [attack, 'a', 'left', 700],
-    [guard, 'b', 'up', 1840],
-    [guard, 'b', 'up', 2139],
-    [guard, 'b', 'right', 2820]
-  ]) {
-    assert.deepEqual(send(updated, id, dir, at), send(original, id, dir, at));
-    for (const [index, shot] of updated.attacks.entries()) {
-      const reference = original.attacks[index];
-      assert.equal(shot.impactAt, reference.impactAt);
-      assert.equal(shot.impactAt - shot.launchedAt, 2200);
-      assert.equal(shot.kind, 'virus');
-      assert.equal(shot.source, 'manual');
-    }
-    assert.equal(updated.attacks.length, original.attacks.length);
-    for (const id of ['a', 'b']) close(player(updated, id).energy, player(original, id).energy);
-  }
-  assert.deepEqual(updated.events, original.events);
-  assert.equal(updated.attacks.length, 0);
+test('faster Clash Virus flights preserve attack cooldowns, energy, and relative guard timing', () => {
+  const m = clash();
+  const travel = fasterTravel(2200, 15);
+  assert.equal(attack(m, 'a', 'up', 0).impactAt, travel);
+  assert.equal(attack(m, 'a', 'right', 349).reason, 'cooldown');
+  assert.equal(attack(m, 'a', 'right', 350).impactAt, travel + 520);
+  assert.equal(attack(m, 'a', 'left', 700).reason, 'energy');
+  close(player(m, 'a').energy, 700 * 1.25 / 1800);
+  assert.ok(m.attacks.every(shot => shot.impactAt - shot.launchedAt === travel && shot.kind === 'virus' && shot.source === 'manual'));
+  const early = travel - 360;
+  assert.equal(guard(m, 'b', 'up', early).guarded, true);
+  assert.equal(guard(m, 'b', 'up', early + 299).reason, 'cooldown');
+  assert.equal(guard(m, 'b', 'right', travel + 520 + 100).perfect, true);
+  assert.equal(m.attacks.length, 0);
 });
 
 test('unupgraded clash retains classic damage and per-defender arrival spacing with multiple attackers', () => {
   const m = clash(['a', 'b', 'c', 'd']);
   const shots = ['a', 'c', 'd'].map(id => E.input(m, id, { type: 'attack', dir: 'up', targetId: 'b' }, 0));
-  assert.deepEqual(shots.map(shot => shot.impactAt), [2200, 2720, 3240]);
+  assert.deepEqual(shots.map(shot => shot.impactAt), [1913, 2433, 2953]);
   assert.deepEqual(m.attacks.map(shot => shot.launchedAt), [0, 520, 1040]);
   assert.ok(m.events.every(event => event.at === 0));
 
@@ -353,6 +345,75 @@ test('unupgraded clash retains classic damage and per-defender arrival spacing w
   }
   assert.deepEqual(damages, [15, 20, 25, 25, 25]);
   assert.equal(duel.winnerId, 'a');
+  assert.equal(duel.finishReason, 'vulnerability');
+});
+
+test('Clash pace rises quickly at first, reaches 150% late, and preserves earlier shots in flight', () => {
+  const startAt = 2000;
+  const m = clash(['a', 'b', 'c'], { startAt });
+  assert.equal(E.snapshot(m, startAt - 1).speedPercent, 0);
+  assert.equal(E.snapshot(m, startAt).speedPercent, 15);
+  const old = attack(m, 'a', 'up', startAt + 3500);
+  assert.equal(old.impactAt - startAt - 3500, fasterTravel(2200, 15));
+  assert.equal(E.snapshot(m, startAt + 3999).speedPercent, 15);
+  assert.equal(E.snapshot(m, startAt + 4000).speedPercent, 30);
+  const next = attack(m, 'b', 'up', startAt + 4000);
+  assert.equal(next.impactAt - startAt - 4000, fasterTravel(2200, 30));
+  assert.equal(m.attacks.find(shot => shot.attackId === old.attackId).impactAt, old.impactAt);
+  for (const [elapsed, speed] of [[8000, 45], [12000, 60], [16000, 75], [27999, 75], [28000, 90], [40000, 105], [52000, 120], [64000, 135], [75999, 135], [76000, 150], [120000, 150]]) {
+    assert.equal(E.snapshot(m, startAt + elapsed).speedPercent, speed);
+  }
+  assert.equal(attack(m, 'a', 'up', startAt + 120_000).impactAt, startAt + 120_000 + 880);
+});
+
+test('Clash recharge grows in twenty-second steps and lets players sustain a faster late burst', () => {
+  const startAt = 3000;
+  const m = clash(['a', 'b'], { startAt });
+  assert.equal(E.snapshot(m, startAt - 1).rechargeRate, 1);
+  for (const [elapsed, rate] of [[0, 1.25], [19999, 1.25], [20000, 1.5], [40000, 1.75], [60000, 2], [80000, 2.25], [100000, 2.5], [120000, 2.5]]) {
+    assert.equal(E.snapshot(m, startAt + elapsed).rechargeRate, rate);
+  }
+  const startBurst = startAt + 120_000;
+  for (let shot = 0; shot < 4; shot++) assert.equal(attack(m, 'a', 'up', startBurst + shot * 350).ok, true);
+  assert.deepEqual(m.attacks.map(shot => shot.impactAt), [880, 1400, 1920, 2440].map(at => startBurst + at));
+  assert.equal(attack(m, 'a', 'up', startBurst + 1400).reason, 'energy');
+});
+
+test('projected and authoritative recharge agree across a pace boundary and stack with a selected upgrade', () => {
+  const startAt = 1250.5;
+  const m = clash(['a', 'b'], { startAt, seed: 0 });
+  const offerAt = startAt + 4000;
+  const { value } = E.input(m, 'a', { type: 'upgrade', offerId: 'offer-1', choiceId: 'recharge' }, offerAt);
+  assert.ok(value > 0);
+  const from = startAt + 19600;
+  const to = startAt + 20400;
+  assert.equal(attack(m, 'a', 'up', from).ok, true);
+  assert.equal(attack(m, 'b', 'right', from).ok, true);
+  const snapshot = E.snapshot(m, from);
+  const expected = (400 * 1.25 + 400 * 1.5) / E.RULES.energyRechargeMs;
+  close(E.baseEnergyGain(snapshot, from, to), expected);
+  close(E.baseEnergyGain(snapshot, startAt - 400, startAt + 400), 400 * 1.25 / E.RULES.energyRechargeMs);
+  close(E.baseEnergyGain(snapshot, startAt + 19600, startAt + 40400), (400 * 1.25 + 20_000 * 1.5 + 400 * 1.75) / E.RULES.energyRechargeMs);
+  close(E.baseEnergyGain({ mode: 'classic', startAt }, from, to), 800 / E.RULES.energyRechargeMs);
+  assert.equal(E.baseEnergyGain(snapshot, to, from), 0);
+  E.advance(m, to);
+  close(player(m, 'a').energy, 2 + expected * (1 + value / 100));
+  close(player(m, 'b').energy, 2 + expected);
+});
+
+test('attacks and compensated guards still work past five minutes, and a later knockout ends the match', () => {
+  const m = clash(['a', 'b'], { guardGraceMs: 120 });
+  const oldLimit = 300_000;
+  const inbound = attack(m, 'b', 'up', oldLimit - 400);
+  assert.equal(E.snapshot(m, oldLimit).status, 'running');
+  assert.equal(E.input(m, 'a', { type: 'guard', dir: 'up' }, inbound.impactAt + 440, { guardDelayMs: 120 }).guarded, true);
+  player(m, 'b').vulnerability = 90;
+  const knockout = attack(m, 'a', 'down', oldLimit + 1000);
+  const settleAt = knockout.impactAt + E.RULES.guardWindowMs + 121;
+  const result = E.snapshot(m, settleAt);
+  assert.equal(result.winnerId, 'a');
+  assert.equal(result.finishedAt, settleAt);
+  assert.equal(result.finishReason, 'vulnerability');
 });
 
 test('trusted guard delay and optional settlement grace are capped, and command-supplied timing is ignored', () => {
@@ -401,9 +462,11 @@ const firstUpgrade = E.RULES.firstUpgradeMs;
 const choose = (m, id, choiceId, at = firstUpgrade, offerId = 'offer-1') =>
   E.input(m, id, { type: 'upgrade', offerId, choiceId }, at);
 
-test('clash offers three shared seeded choices, accepts one, and keeps unclaimed offers', () => {
+test('Clash offers three shared choices at four and eleven seconds and keeps unclaimed offers', () => {
   const roster = ['a', 'b', 'c'];
   const m = clash(roster, { seed: 0 });
+  assert.equal(firstUpgrade, 4000);
+  assert.equal(E.RULES.upgradeIntervalMs, 7000);
   assert.equal(E.snapshot(m, firstUpgrade - 1).players[0].offer, null);
   assert.equal(choose(m, 'a', 'recharge', firstUpgrade - 1).reason, 'invalid_offer');
   const before = E.snapshot(m, firstUpgrade);
@@ -434,7 +497,7 @@ test('clash offers three shared seeded choices, accepts one, and keeps unclaimed
   const shot = attack(m, 'a', 'up', firstUpgrade);
   assert.equal(shot.ok, true);
   E.advance(m, firstUpgrade + E.RULES.energyRechargeMs / 2);
-  close(player(m, 'a').energy, 2 + 0.5 * (1 + result.value / 100));
+  close(player(m, 'a').energy, 2 + 0.5 * 1.25 * (1 + result.value / 100));
   assert.equal(guard(m, 'b', 'up', shot.impactAt).guarded, true);
   const second = E.snapshot(m, firstUpgrade + E.RULES.upgradeIntervalMs);
   assert.equal(second.players[0].offer.id, 'offer-2');
@@ -461,7 +524,7 @@ test('a seeded mutation roll can add a non-Virus behind the original attack for 
       assert.ok(extra.impactAt - primary.impactAt >= E.RULES.arrivalGapMs);
       const travel = { trojan: 1800, worm: 900, ransom: 1250, phishing: 1900, ddos: 2200 }[extra.kind];
       assert.ok(extra.launchedAt > firstUpgrade);
-      assert.equal(extra.impactAt - extra.launchedAt, travel);
+      assert.equal(extra.impactAt - extra.launchedAt, fasterTravel(travel, 30));
       assert.equal(lastEvent(m, 'attack').at, firstUpgrade);
     }
   }
@@ -475,11 +538,11 @@ test('selected attack speed applies to the player’s new shots without changing
   const fast = attack(m, 'a', 'up', firstUpgrade);
   const regular = attack(m, 'b', 'right', firstUpgrade);
   assert.equal(m.attacks.find(shot => shot.attackId === old.attackId).impactAt, old.impactAt);
-  assert.equal(regular.impactAt - firstUpgrade, E.RULES.travelMs);
-  assert.equal(fast.impactAt - firstUpgrade, fasterTravel(E.RULES.travelMs, value));
+  assert.equal(regular.impactAt - firstUpgrade, fasterTravel(E.RULES.travelMs, 30));
+  assert.equal(fast.impactAt - firstUpgrade, fasterTravel(E.RULES.travelMs, 30 + value));
   assert.ok(fast.impactAt < regular.impactAt);
   const flight = m.attacks.find(shot => shot.attackId === fast.attackId);
-  assert.equal(flight.impactAt - flight.launchedAt, fasterTravel(E.RULES.travelMs, value));
+  assert.equal(flight.impactAt - flight.launchedAt, fasterTravel(E.RULES.travelMs, 30 + value));
 });
 
 test('clash repair reports actual vulnerability restored and perfect energy applies on the next perfect', () => {
@@ -515,7 +578,7 @@ test('a Trojan from mutation creates an opposite-lane echo when parried', () => 
   assert.equal(echo.kind, 'echo');
   assert.equal(echo.dir, 'right');
   assert.equal(echo.from, 'a');
-  assert.equal(echo.impactAt - echo.launchedAt, 700);
+  assert.equal(echo.impactAt - echo.launchedAt, 550);
 });
 
 test('Phishing from mutation reveals the true guard lane opposite its decoy', () => {

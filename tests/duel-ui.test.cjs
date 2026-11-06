@@ -62,13 +62,13 @@ test('original skill button and Space select one attack while Shift attacks with
   assert.equal(opponentArena.querySelectorAll('[data-kind="virus"]').length,2);
 });
 
-test('CPU attacks use the original Virus actor, 2200ms movement and original perfect-parry effects',()=>{
+test('faster CPU attacks use the original Virus actor and perfect-parry effects',()=>{
   const game=createDuel();startPractice(game);advance(game,2800);
   const actor=game.run("enemies.find(enemy=>enemy.dir==='left')");
-  assert.equal(actor.kind,'virus');assert.equal(actor.node.getAttribute('data-kind'),'virus');assert.equal(actor.at,2800);assert.equal(actor.arrival,5000);assert.equal(actor.travel,2200);
+  assert.equal(actor.kind,'virus');assert.equal(actor.node.getAttribute('data-kind'),'virus');assert.equal(actor.at,2800);assert.equal(actor.arrival,4713);assert.equal(actor.travel,1913);
   assert.equal(game.element('duel-opponent-arena').querySelectorAll('[data-kind="virus"]').length,0,'CPU attack travels in the local arena only');
   assert.equal(actor.outline.getAttribute('d'),game.run("shapePath('virus')"));assert.equal(actor.node.parentNode,game.element('enemies'));
-  advance(game,2200);key(game,'ArrowLeft');frame(game,0);
+  advance(game,1950);key(game,'ArrowLeft');frame(game,0);
   assert.match(game.element('message').textContent,/Perfect/);assert.equal(game.element('score').textContent,'1');assert.equal(game.element('vulnerability-value').textContent,'0%');
   assert.equal(game.element('fighter').dataset.pose,'left');assert.equal(game.element('fighter').dataset.flash,'true');assert.equal(actor.node.parentNode,null);assert.ok(game.element('foreground-fx').children.length>0);assert.ok(game.element('effects').children.length>0);
   advance(game,200);assert.equal(game.element('vulnerability').getAttribute('aria-valuenow'),'0');
@@ -190,13 +190,14 @@ test('four-player duel routes attacks and upgrade picks through their visible co
   await settle();
 
   game.run(`
-    window.__now=18000;
+    window.__now=14000;
     const match=NeonDuelEngine.createMatch({players:window.__room.players.map(player=>player.id),startAt:10000,mode:'clash',seed:123});
-    window.__callbacks.onState({room:window.__room,battle:NeonDuelEngine.snapshot(match,18000),serverTime:18000});
+    window.__callbacks.onState({room:window.__room,battle:NeonDuelEngine.snapshot(match,14000),serverTime:14000});
   `);
   frame(game);
   const choices=game.element('duel-upgrades').querySelectorAll('[data-duel-upgrade]');
   assert.equal(choices.length,3);
+  assert.equal(game.element('duel-speed').textContent,'Shot speed +30%');
   assert.equal(game.element('duel-upgrades').hidden,false);
   assert.equal(game.element('overlay').hidden,true,'drafting leaves the arena playable');
   key(game,'Digit2');await settle();
